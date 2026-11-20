@@ -2,7 +2,7 @@
 source: crates/pgdelta-core/tests/table_driven.rs
 expression: script
 ---
--- pgdelta 0.2.0 migration
+-- pgdelta 0.4.0 migration
 -- from: <65_function_overloads/from.sql>
 -- to:   <65_function_overloads/to.sql>
 --

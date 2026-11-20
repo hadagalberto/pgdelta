@@ -1321,13 +1321,12 @@ fn apply_alter_action(
                 .remove(&(schema.to_owned(), table_name.to_owned()))
                 .ok_or_else(|| Error::internal(format!("table {schema}.{table_name} vanished")))?;
             table.name.clone_from(&new_name);
-            for idx in catalog
-                .indexes
-                .values_mut()
-                .filter(|idx| idx.schema == schema && idx.table == table_name)
-            {
-                idx.table.clone_from(&new_name);
-            }
+            // PostgreSQL stores references by OID, so indexes, foreign keys,
+            // triggers, policies, owned sequences, partitions and view
+            // queries all follow a table RENAME. `rename_table_refs` is the
+            // same helper the rename-hint planner uses, keeping the in-memory
+            // oracle faithful to the live behaviour.
+            crate::rename::rename_table_refs(catalog, schema, table_name, &new_name);
             catalog.tables.insert((schema.to_owned(), new_name), table);
             Ok(())
         }

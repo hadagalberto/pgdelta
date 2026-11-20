@@ -40,6 +40,8 @@ use crate::model::{
     IndexElemKind, NullsOrder, SortOrder, Table,
 };
 use crate::naming::{qualified, quote_ident};
+use crate::rename::{RenameHint, RenameOp};
+use crate::safety::Hazard;
 use crate::sql::sequence_options_to_sql;
 
 /// A single planned statement.
@@ -53,6 +55,9 @@ pub struct PlanStatement {
     pub object: String,
     /// Whether the statement may run inside a transaction.
     pub transactional: bool,
+    /// Safety hazards attached by [`crate::safety::analyze_plan`]. Empty
+    /// when the statement is online-safe.
+    pub hazards: Vec<Hazard>,
 }
 
 /// A section of the migration script.
@@ -85,6 +90,13 @@ impl Plan {
             .collect()
     }
 
+    /// Every statement in order, mutably.
+    pub(crate) fn statements_mut(&mut self) -> impl Iterator<Item = &mut PlanStatement> {
+        self.sections
+            .iter_mut()
+            .flat_map(|s| s.statements.iter_mut())
+    }
+
     /// True when the plan has no statements (the schemas already
     /// converge).
     #[must_use]
@@ -92,7 +104,7 @@ impl Plan {
         self.statements().is_empty()
     }
 
-    /// Counts statements per action category.
+    /// Counts statements per action category and hazards per kind.
     #[must_use]
     pub fn summary(&self) -> PlanSummary {
         let mut summary = PlanSummary::default();
@@ -102,6 +114,13 @@ impl Plan {
                 "alter" => summary.alters += 1,
                 "drop" => summary.drops += 1,
                 _ => {}
+            }
+            for hazard in &statement.hazards {
+                summary.hazards += 1;
+                match hazard.category {
+                    crate::safety::HazardCategory::Destructive => summary.destructive += 1,
+                    crate::safety::HazardCategory::Locking => summary.locking += 1,
+                }
             }
         }
         summary.total = self.statements().len();
@@ -120,6 +139,12 @@ pub struct PlanSummary {
     pub alters: usize,
     /// `DROP ...` statements.
     pub drops: usize,
+    /// Total safety hazards across all statements.
+    pub hazards: usize,
+    /// Destructive hazards.
+    pub destructive: usize,
+    /// Locking hazards.
+    pub locking: usize,
 }
 
 /// Ranks (broad phases) for the dependency sort.
@@ -191,7 +216,39 @@ mod rank {
     pub(crate) const CREATE_INDEX_CONCURRENTLY: u32 = 180;
 }
 
-/// Plans a migration from `from` to `to`.
+/// Options controlling planning (`--online` and `--rename`).
+#[derive(Debug, Clone, Default)]
+pub struct PlanOptions {
+    /// Rewrite the plan into online-safe statement sequences.
+    pub online: bool,
+    /// Opt-in rename hints. Never guessed by the planner itself.
+    pub renames: Vec<RenameHint>,
+}
+
+/// Plans a migration with explicit options.
+///
+/// # Errors
+///
+/// Returns [`Error::Invalid`] for a rename hint that cannot be applied,
+/// and [`Error::Internal`] if the dependency graph contains a cycle.
+pub fn plan_with_options(
+    from: &Catalog,
+    to: &Catalog,
+    from_desc: &str,
+    to_desc: &str,
+    options: &PlanOptions,
+) -> Result<Plan> {
+    let (renamed_from, renames) = crate::rename::apply_rename_hints(from, to, &options.renames)?;
+    let mut planned = plan_impl(&renamed_from, to, from_desc, to_desc, renames)?;
+    if options.online {
+        crate::safety::rewrite_online(&mut planned, from, to);
+    }
+    crate::safety::analyze_plan(&mut planned, &renamed_from, to);
+    Ok(planned)
+}
+
+/// Plans a migration from `from` to `to` with the default (conservative)
+/// options: no renames and no online rewriting.
 ///
 /// Returns an error only on an internal planning bug (a dependency
 /// cycle); model-level inconsistencies were already rejected when the
@@ -202,8 +259,35 @@ mod rank {
 /// Returns [`Error::Internal`] if the dependency graph contains a cycle
 /// (a pgdelta bug, not a user condition).
 pub fn plan(from: &Catalog, to: &Catalog, from_desc: &str, to_desc: &str) -> Result<Plan> {
+    plan_with_options(from, to, from_desc, to_desc, &PlanOptions::default())
+}
+
+fn plan_impl(
+    from: &Catalog,
+    to: &Catalog,
+    from_desc: &str,
+    to_desc: &str,
+    renames: Vec<RenameOp>,
+) -> Result<Plan> {
     let changes = crate::diff::diff(from, to);
     let mut nodes: Vec<PlanNode<PlanStatement>> = Vec::new();
+
+    // Rename hints run before every drop/create: later statements already
+    // reference the new names (the hints were applied to the source model).
+    for rename in renames {
+        nodes.push(PlanNode {
+            rank: rename.rank,
+            key: rename.key,
+            payload: PlanStatement {
+                sql: rename.sql,
+                action: "alter",
+                object: rename.object,
+                transactional: true,
+                hazards: Vec::new(),
+            },
+            after: Vec::new(),
+        });
+    }
 
     // Drop phase.
     for change in &changes {
@@ -249,6 +333,7 @@ pub fn plan(from: &Catalog, to: &Catalog, from_desc: &str, to_desc: &str) -> Res
                         action: "drop",
                         object: qualified(schema, name),
                         transactional: true,
+                        hazards: Vec::new(),
                     },
                     after,
                 });
@@ -562,6 +647,7 @@ pub fn plan(from: &Catalog, to: &Catalog, from_desc: &str, to_desc: &str) -> Res
                         action: "create",
                         object: qualified(&index.schema, &index.name),
                         transactional,
+                        hazards: Vec::new(),
                     },
                     after: Vec::new(),
                 });
@@ -645,6 +731,7 @@ pub fn plan(from: &Catalog, to: &Catalog, from_desc: &str, to_desc: &str) -> Res
                         action: "create",
                         object: object.clone(),
                         transactional: true,
+                        hazards: Vec::new(),
                     },
                     after,
                 });
@@ -865,6 +952,7 @@ fn node(
             action,
             object,
             transactional: true,
+            hazards: Vec::new(),
         },
         after: Vec::new(),
     }
@@ -1367,7 +1455,7 @@ pub fn render_sql(plan: &Plan) -> String {
         return String::new();
     }
     let mut out = String::new();
-    out.push_str("-- pgdelta 0.2.0 migration\n");
+    out.push_str("-- pgdelta 0.4.0 migration\n");
     out.push_str(&format!("-- from: {}\n", plan.from_desc));
     out.push_str(&format!("-- to:   {}\n", plan.to_desc));
     out.push_str("--\n");
@@ -1410,6 +1498,7 @@ pub fn render_json(plan: &Plan) -> Result<Value> {
         object: &'a str,
         sql: &'a str,
         transactional: bool,
+        hazards: &'a [Hazard],
     }
     let mut sections = Vec::new();
     for section in &plan.sections {
@@ -1421,6 +1510,7 @@ pub fn render_json(plan: &Plan) -> Result<Value> {
                 object: &s.object,
                 sql: &s.sql,
                 transactional: section.transactional,
+                hazards: &s.hazards,
             })
             .collect();
         sections.push(serde_json::json!({

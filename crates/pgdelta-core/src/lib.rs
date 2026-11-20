@@ -22,6 +22,8 @@ pub mod introspect;
 pub mod model;
 pub mod naming;
 pub mod plan;
+pub mod rename;
+pub mod safety;
 pub mod source;
 pub mod sql;
 
@@ -35,7 +37,14 @@ pub use model::{
     PolicyCommand, Routine, RoutineArg, RoutineKind, Schema, Security, Sequence, SequenceOptions,
     SequenceOwner, Table, Trigger, TriggerEvent, TriggerLevel, TriggerTiming, View, Volatility,
 };
-pub use plan::{Plan, PlanSection, PlanStatement, PlanSummary, plan};
+pub use plan::{
+    Plan, PlanOptions, PlanSection, PlanStatement, PlanSummary, plan, plan_with_options,
+};
+pub use rename::{RenameHint, RenameKind, parse_rename_hint};
+pub use safety::{
+    ColorChoice, Hazard, HazardCategory, HazardLine, StatementInput, analyze_statements,
+    plan_hazard_count, plan_hazard_lines, render_hazard_report, render_lint_json,
+};
 pub use source::{
     SourceSpec, apply_sql_to, catalog_from_sql, load_catalog, load_catalog_with_shadow,
     load_catalog_with_shadow_async, split_sql_statements,

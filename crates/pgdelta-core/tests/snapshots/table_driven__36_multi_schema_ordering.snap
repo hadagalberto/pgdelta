@@ -2,7 +2,7 @@
 source: crates/pgdelta-core/tests/table_driven.rs
 expression: script
 ---
--- pgdelta 0.2.0 migration
+-- pgdelta 0.4.0 migration
 -- from: <36_multi_schema_ordering/from.sql>
 -- to:   <36_multi_schema_ordering/to.sql>
 --

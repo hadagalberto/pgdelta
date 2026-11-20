@@ -6,6 +6,44 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] — milestone 4
+
+### Added
+
+- Safety analysis for every planned and linted statement: destructive hazards
+  (`DROP TABLE/SCHEMA/COLUMN/CONSTRAINT`, type narrowing) and locking hazards
+  (`ALTER COLUMN ... TYPE` rewrites, `SET NOT NULL` without a validated check,
+  `ADD CONSTRAINT` without `NOT VALID`, standard index builds, concurrent
+  index builds inside a transaction). Rules and official PostgreSQL citations
+  live in `docs/safety.md` and in `src/safety.rs`.
+- `--online`: rewrites `CHECK`/`FOREIGN KEY` additions to `NOT VALID` +
+  `VALIDATE CONSTRAINT`, wraps `SET NOT NULL` in a validated-check sequence
+  (with the helper constraint dropped afterwards so the schema converges), and
+  moves `CREATE INDEX CONCURRENTLY` to the non-transactional section
+  (partitioned-table indexes are exempt — concurrent builds are unsupported).
+- `pgdelta lint migration.sql` for handwritten migrations, with human and
+  `--json` output using the same analyser as generated plans.
+- Opt-in `--rename table.old=new` / `--rename column.table.old=new` hints
+  (also `index`, `view`, `type`, `sequence`): emitted as `ALTER ... RENAME`
+  before the rest of the plan, never guessed silently, and validated against
+  both catalogs.
+- Colored human hazard summary on stderr with `--color auto|always|never`
+  (`auto` honours `NO_COLOR`); JSON plans now carry per-statement hazards and
+  per-category summary counts.
+- `--fail-on-hazard` returns exit code 2 for `diff` and `lint`.
+- Property test for online-plan convergence, plus milestone-4 integration and
+  CLI tests covering known-valid/known-invalid vectors, JSON, colour, rename
+  hints and exit codes.
+
+### Fixed
+
+- `ALTER TABLE ... RENAME TO` in the in-memory applier now propagates the new
+  name to foreign keys, indexes, triggers, policies, owned sequences,
+  partitions, view queries and comments/grants, matching PostgreSQL's OID
+  references.
+- Hazard keyword matching handles both `CHECK (` and the tokeniser's
+  canonical `CHECK(` form, and ignores SQL comments and string literals.
+
 ## [0.3.0] — milestone 3
 
 ### Added

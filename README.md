@@ -11,21 +11,18 @@ MIT licensed. [Leia em português](README.pt-BR.md).
 
 ## Status
 
-Milestone 3: normalised catalog model and diff/plan for schemas, extensions,
-tables, columns, constraints, indexes, user-defined types (enum, composite,
-domain, range), sequences, views/materialized views, overloaded functions and
-procedures, triggers, RLS policies, partitioned tables, comments and grants.
-Live introspection reads every modelled object from `pg_catalog` and feeds
-deparsed expressions through the SQL parser's own normalisers, so a live
-source and a SQL file describing the same schema compare equal (parity).
-Plans are dependency-ordered, drop and recreate views on referenced column
-type changes, and are covered by 75 insta snapshot/convergence cases plus
-live convergence, parity, shadow-mode, known-valid/known-invalid and property
-tests.
+Milestone 4: on top of the full object coverage and live introspection of
+milestones 1–3, pgdelta now performs **safety analysis** (destructive and
+locking hazards), rewrites risky plans with **`--online`**, accepts opt-in
+**`--rename` hints**, exposes a **JSON plan** and a **colored human summary**,
+supports `pgdelta lint` for handwritten migrations, and returns **exit code 2**
+with `--fail-on-hazard`. Property tests cover online convergence, and the
+75 table-driven snapshot/convergence cases, live parity and known-valid /
+known-invalid vectors all pass.
 
-See [SPEC.md](SPEC.md) for the complete design and
-[docs/parser.md](docs/parser.md) for the parser decision and normalisation
-rules.
+See [SPEC.md](SPEC.md) for the design, [docs/parser.md](docs/parser.md) for
+the parser decision and [docs/safety.md](docs/safety.md) for the hazard rules
+and their official PostgreSQL citations.
 
 ## Usage
 
@@ -33,8 +30,22 @@ rules.
 # Generate a migration script
 cargo run -p pgdelta -- diff --from schema.sql --to wanted/ --out migration.sql
 
-# JSON plan instead of SQL
+# JSON plan (sections, statements, hazards, summary)
 cargo run -p pgdelta -- diff --from old.sql --to new.sql --json
+
+# Online-safe plan: NOT VALID → VALIDATE → SET NOT NULL,
+# FK NOT VALID → VALIDATE, CREATE INDEX CONCURRENTLY outside a transaction
+cargo run -p pgdelta -- diff --from old.sql --to new.sql --online
+
+# Opt-in rename hints (never guessed silently); may be repeated
+cargo run -p pgdelta -- diff --from old.sql --to new.sql \
+  --rename table.users=people --rename column.people.email=contact
+
+# Fail CI when the plan contains hazards (exit code 2)
+cargo run -p pgdelta -- diff --from live --to wanted/ --fail-on-hazard
+
+# Analyse a handwritten migration with the same rules
+cargo run -p pgdelta -- lint migration.sql --json
 
 # Dump the normalised model of a source
 cargo run -p pgdelta -- inspect schema/
@@ -47,9 +58,30 @@ cargo run -p pgdelta -- diff --from old.sql --to new.sql \
   --shadow postgres://user:pass@host/postgres
 ```
 
-The script has an explicit transactional `BEGIN; ... COMMIT;` block; any
-`CREATE INDEX CONCURRENTLY` statements follow in a separate, clearly marked
-non-transactional section.
+The script has an explicit transactional `BEGIN; ... COMMIT;` block
+containing rename statements, drops and ordinary alterations. Non-transactional
+steps (`CREATE INDEX CONCURRENTLY`) follow in a clearly marked section. The
+human summary and hazard markers go to **stderr**; SQL and JSON go to
+**stdout**, so either can be piped safely. `--color auto|always|never`
+controls ANSI colour (`auto` honours `NO_COLOR`).
+
+### Exit codes
+
+| Code | Meaning |
+| ---- | ------- |
+| 0 | Success (including "no changes"). |
+| 1 | Operational error (bad source, invalid SQL, invalid rename hint). |
+| 2 | Hazards found and `--fail-on-hazard` was requested. |
+
+### Hazard analysis
+
+Every statement is classified as **destructive** (`DROP TABLE/SCHEMA/COLUMN`,
+`DROP CONSTRAINT`, narrowing a column type) or **locking** (`ALTER COLUMN
+TYPE` rewrites, `SET NOT NULL` without a validated `CHECK`, `ADD
+CHECK/FOREIGN KEY` without `NOT VALID`, standard `CREATE INDEX`,
+`CREATE INDEX CONCURRENTLY` inside a transaction). `--online` removes the
+locking hazards that can be made safe without changing the final schema;
+destructive steps are still reported because they discard data.
 
 ## Development
 
@@ -77,8 +109,10 @@ crates.io.
 
 ## Layout
 
-* `crates/pgdelta-core` — model, SQL parsing/applying, diff, planner;
-* `crates/pgdelta` — `clap` command line;
+* `crates/pgdelta-core` — model, SQL parsing/applying, diff, planner,
+  safety analysis, rename hints and reporting;
+* `crates/pgdelta` — `clap` command line (`diff`, `inspect`, `lint`);
 * `crates/pgdelta-core/tests/cases` — table-driven `(from.sql, to.sql)`
   fixtures with insta snapshots and a convergence oracle;
+* `docs/` — parser decision, safety rules and citations;
 * `.github/workflows/ci.yml` — unit, lint and PostgreSQL 13–18 matrix.

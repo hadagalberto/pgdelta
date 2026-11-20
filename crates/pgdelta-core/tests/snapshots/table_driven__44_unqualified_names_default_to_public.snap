@@ -2,7 +2,7 @@
 source: crates/pgdelta-core/tests/table_driven.rs
 expression: script
 ---
--- pgdelta 0.2.0 migration
+-- pgdelta 0.4.0 migration
 -- from: <44_unqualified_names_default_to_public/from.sql>
 -- to:   <44_unqualified_names_default_to_public/to.sql>
 --

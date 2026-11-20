@@ -30,7 +30,7 @@ use pgdelta_core::model::{
     IdentityKind, Index, IndexElem, IndexElemKind, PUBLIC_SCHEMA, SequenceOptions, SortOrder,
     Table,
 };
-use pgdelta_core::{apply_sql_to, catalog_from_sql, plan};
+use pgdelta_core::{PlanOptions, apply_sql_to, catalog_from_sql, plan, plan_with_options};
 
 fn any_catalog() -> impl Strategy<Value = Catalog> {
     (
@@ -438,6 +438,28 @@ proptest! {
         let mut actual = Catalog::new();
         apply_sql_to(&mut actual, &script, "migration.sql").unwrap();
         common::assert_equivalent(&actual, &a, "plan(empty -> a) applied to empty");
+    }
+
+    /// The `--online` rewriting must preserve convergence: the extra
+    /// NOT VALID/VALIDATE/CHECK bookkeeping is a build strategy, not schema
+    /// state. `CONCURRENTLY` is likewise a build method, so the generated
+    /// flag is normalised before comparing (PostgreSQL has no catalog flag
+    /// recording how an index was built).
+    #[test]
+    fn online_plan_applied_to_a_converges_to_b(a in any_catalog(), b in any_catalog()) {
+        let options = PlanOptions {
+            online: true,
+            renames: Vec::new(),
+        };
+        let planned = plan_with_options(&a, &b, "<a>", "<b>", &options).unwrap();
+        let script = pgdelta_core::plan::render_sql(&planned);
+        let mut converged = a.clone();
+        apply_sql_to(&mut converged, &script, "migration.sql").unwrap();
+        let mut expected = b.clone();
+        for index in converged.indexes.values_mut().chain(expected.indexes.values_mut()) {
+            index.concurrent = false;
+        }
+        common::assert_equivalent(&converged, &expected, "online plan(a -> b) applied to a");
     }
 }
 

@@ -2,7 +2,7 @@
 source: crates/pgdelta-core/tests/table_driven.rs
 expression: script
 ---
--- pgdelta 0.2.0 migration
+-- pgdelta 0.4.0 migration
 -- from: <63_view_type_change_recreate/from.sql>
 -- to:   <63_view_type_change_recreate/to.sql>
 --
