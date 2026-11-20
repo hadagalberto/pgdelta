@@ -325,6 +325,24 @@ fn plan_impl(
                         }
                     }
                 }
+                // Tables dropped in the same plan whose foreign keys
+                // reference this table must go first (RESTRICT semantics).
+                for ((ref_schema_k, ref_name_k), other) in &from.tables {
+                    if ref_schema_k == schema && ref_name_k == name {
+                        continue;
+                    }
+                    let references_this = other.constraints.iter().any(|c| {
+                        matches!(&c.kind, ConstraintKind::ForeignKey { ref_schema, ref_table, .. }
+                            if ref_schema == schema && ref_table == name)
+                    });
+                    let other_dropped = changes.iter().any(|c| {
+                        matches!(c, Change::DropTable { schema: s, name: n }
+                            if s == ref_schema_k && n == ref_name_k)
+                    });
+                    if references_this && other_dropped {
+                        after.push(format!("drop-table:{ref_schema_k}.{ref_name_k}"));
+                    }
+                }
                 nodes.push(PlanNode {
                     rank: rank::DROP_TABLE,
                     key: format!("drop-table:{schema}.{name}"),

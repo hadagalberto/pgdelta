@@ -156,6 +156,42 @@ impl ColumnStorage {
             _ => None,
         }
     }
+
+    /// The `pg_type.typstorage` default of a built-in type, given its
+    /// canonical (`format_type`) spelling; `None` when the type is not a
+    /// known built-in (domains, enums, composites, extension types).
+    #[must_use]
+    pub fn builtin_default(data_type: &str) -> Option<Self> {
+        if data_type.ends_with("[]") {
+            return Some(ColumnStorage::Extended);
+        }
+        let base = data_type.split('(').next().unwrap_or(data_type).trim();
+        match base {
+            "text" | "character varying" | "character" | "bytea" | "json" | "jsonb" | "xml"
+            | "tsvector" | "tsquery" | "bit varying" | "bit" | "path" | "polygon" => {
+                Some(ColumnStorage::Extended)
+            }
+            "numeric" | "inet" | "cidr" => Some(ColumnStorage::Main),
+            "smallint" | "integer" | "bigint" | "boolean" | "real" | "double precision"
+            | "date" | "uuid" | "money" | "oid" | "\"char\"" | "point" | "box" | "line"
+            | "lseg" | "circle" | "macaddr" | "macaddr8" | "interval" => Some(ColumnStorage::Plain),
+            _ if base.starts_with("timestamp") || base.starts_with("time") => {
+                Some(ColumnStorage::Plain)
+            }
+            _ => None,
+        }
+    }
+
+    /// Normalises an explicit storage mode: a mode equal to the built-in
+    /// type's default is the same catalog state as `STORAGE DEFAULT`, which
+    /// live introspection reports as `None`.
+    #[must_use]
+    pub fn normalize(storage: Option<Self>, data_type: &str) -> Option<Self> {
+        match storage {
+            Some(mode) if Self::builtin_default(data_type) == Some(mode) => None,
+            other => other,
+        }
+    }
 }
 
 /// A stored generated column.

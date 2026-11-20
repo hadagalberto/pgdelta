@@ -294,7 +294,7 @@ fn build_column(source: &str, index: usize, raw: &RawColumn, text: &str) -> Resu
         generated: raw.generated.clone().map(|expr| Generated { expr }),
         identity,
         collation: raw.collation.clone(),
-        storage: raw.storage,
+        storage: crate::model::ColumnStorage::normalize(raw.storage, &raw.data_type),
     })
 }
 
@@ -1109,7 +1109,8 @@ fn apply_alter_action(
         }
         AlterAction::SetStorage { column, storage } => {
             let table = table_mut(catalog, schema, table_name, source, index)?;
-            column_mut(table, column, source, index, "SET STORAGE")?.storage = *storage;
+            let col = column_mut(table, column, source, index, "SET STORAGE")?;
+            col.storage = crate::model::ColumnStorage::normalize(*storage, &col.data_type);
             Ok(())
         }
         AlterAction::AddIdentity {

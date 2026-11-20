@@ -312,10 +312,9 @@ fn valid_storage_and_exclusion_vectors() {
     let t = catalog.table("public", "t").unwrap();
     assert_eq!(t.column("a").unwrap().storage, Some(ColumnStorage::Main));
     assert_eq!(t.column("b").unwrap().storage, Some(ColumnStorage::Plain));
-    assert_eq!(
-        t.column("c").unwrap().storage,
-        Some(ColumnStorage::Extended)
-    );
+    // EXTENDED is text's typstorage default: live introspection reports
+    // None for it, so the SQL-file model must agree.
+    assert_eq!(t.column("c").unwrap().storage, None);
     // `STORAGE DEFAULT` and an omitted clause both normalise to None.
     assert_eq!(t.column("d").unwrap().storage, None);
     let exclusion = t.constraint("t_excl").unwrap();

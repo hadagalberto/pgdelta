@@ -151,7 +151,15 @@ pub(crate) fn join_tokens_canonical(tokens: &[Token]) -> String {
 /// `pg_get_constraintdef` and pgdelta must compare it with a SQL source.
 pub(crate) fn normalize_sql_text(text: &str) -> String {
     match sqlparser::tokenizer::Tokenizer::new(&PostgreSqlDialect {}, text).tokenize() {
-        Ok(tokens) => join_tokens_canonical(&tokens),
+        Ok(tokens) => {
+            // Statement cursors never see whitespace tokens; strip them here
+            // too so both sides render identically.
+            let tokens: Vec<Token> = tokens
+                .into_iter()
+                .filter(|token| !matches!(token, Token::Whitespace(_)))
+                .collect();
+            join_tokens_canonical(&tokens)
+        }
         Err(_) => text.to_owned(),
     }
 }
