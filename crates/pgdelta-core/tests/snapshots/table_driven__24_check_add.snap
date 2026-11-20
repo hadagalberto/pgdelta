@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <24_check_add/from.sql>
+-- to:   <24_check_add/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TABLE "public"."orders" ADD CONSTRAINT "orders_amount_check" CHECK ("amount" >= 0);
+
+COMMIT;

@@ -1,0 +1,48 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <45_mixed_kitchen_sink/from.sql>
+-- to:   <45_mixed_kitchen_sink/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TABLE "public"."audit_log" DROP CONSTRAINT "audit_log_account_id_fkey";
+
+DROP TABLE "old"."accounts";
+
+DROP EXTENSION "pg_trgm";
+
+DROP SCHEMA "old";
+
+CREATE SCHEMA "finance";
+
+CREATE EXTENSION "pg_trgm" WITH SCHEMA "finance";
+
+CREATE TABLE "finance"."accounts" (
+    "id" bigint GENERATED ALWAYS AS IDENTITY (INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START WITH 1 CACHE 1 NO CYCLE) NOT NULL,
+    "owner" text NOT NULL,
+    "balance" numeric(10,2) DEFAULT 0,
+    CONSTRAINT "accounts_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "finance"."transactions" (
+    "id" bigint GENERATED ALWAYS AS IDENTITY (INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START WITH 1 CACHE 1 NO CYCLE) NOT NULL,
+    "account_id" bigint,
+    "amount" numeric(10,2),
+    "posted_at" timestamp with time zone DEFAULT "now"()
+);
+
+ALTER TABLE "finance"."transactions" ADD CONSTRAINT "transactions_amount_check" CHECK ("amount" <> 0) NOT VALID;
+
+ALTER TABLE "public"."audit_log" ADD COLUMN "severity" text;
+
+ALTER TABLE "finance"."transactions" ADD CONSTRAINT "transactions_account_id_fkey" FOREIGN KEY ("account_id") REFERENCES "finance"."accounts" ("id");
+
+CREATE INDEX "public"."idx_audit_severity" ON "public"."audit_log" ("severity") WHERE "severity" is not null;
+
+COMMIT;

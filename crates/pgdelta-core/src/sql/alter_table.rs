@@ -11,7 +11,10 @@ use sqlparser::tokenizer::Token;
 
 use super::create_table::{parse_column_def, parse_deferrable, parse_table_constraint};
 use super::tokens::Cursor;
-use super::{ParsedSequenceOptions, ParsedStatement, RawColumn, RawConstraint, RawTable, parse_sequence_options_paren};
+use super::{
+    ParsedSequenceOptions, ParsedStatement, RawColumn, RawConstraint, RawTable,
+    parse_sequence_options_paren,
+};
 use crate::error::{Error, Result};
 use crate::model::IdentityKind;
 
@@ -255,7 +258,12 @@ fn parse_action(
         // ADD [CONSTRAINT [name]] table_constraint [NOT VALID].
         if cursor.eat_word("CONSTRAINT") {
             let Some(name) = cursor.parse_ident() else {
-                return Err(Error::parse(source, index, "expected a constraint name after ADD CONSTRAINT", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a constraint name after ADD CONSTRAINT",
+                    text,
+                ));
             };
             return parse_add_constraint(source, index, cursor, text, Some(name));
         }
@@ -283,7 +291,12 @@ fn parse_action(
         if cursor.eat_word("CONSTRAINT") {
             let if_exists = cursor.eat_words2("IF", "EXISTS");
             let Some(name) = cursor.parse_ident() else {
-                return Err(Error::parse(source, index, "expected a constraint name", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a constraint name",
+                    text,
+                ));
             };
             parse_drop_behavior(source, index, cursor, text, "DROP CONSTRAINT")?;
             return Ok(AlterAction::DropConstraint { name, if_exists });
@@ -298,7 +311,12 @@ fn parse_action(
             ));
         }
         let Some(name) = cursor.parse_ident() else {
-            return Err(Error::parse(source, index, "expected a column name after DROP COLUMN", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected a column name after DROP COLUMN",
+                text,
+            ));
         };
         parse_drop_behavior(source, index, cursor, text, "DROP COLUMN")?;
         return Ok(AlterAction::DropColumn { name, if_exists });
@@ -308,10 +326,20 @@ fn parse_action(
     }
     if cursor.eat_word("VALIDATE") {
         if !cursor.eat_word("CONSTRAINT") {
-            return Err(Error::parse(source, index, "expected CONSTRAINT after VALIDATE", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected CONSTRAINT after VALIDATE",
+                text,
+            ));
         }
         let Some(name) = cursor.parse_ident() else {
-            return Err(Error::parse(source, index, "expected a constraint name", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected a constraint name",
+                text,
+            ));
         };
         return Ok(AlterAction::ValidateConstraint { name });
     }
@@ -321,28 +349,58 @@ fn parse_action(
                 return Err(Error::parse(source, index, "expected a column name", text));
             };
             if !cursor.eat_word("TO") {
-                return Err(Error::parse(source, index, "expected TO in RENAME COLUMN", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected TO in RENAME COLUMN",
+                    text,
+                ));
             }
             let Some(to) = cursor.parse_ident() else {
-                return Err(Error::parse(source, index, "expected a new column name", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a new column name",
+                    text,
+                ));
             };
             return Ok(AlterAction::RenameColumn { from, to });
         }
         if cursor.eat_word("CONSTRAINT") {
             let Some(from) = cursor.parse_ident() else {
-                return Err(Error::parse(source, index, "expected a constraint name", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a constraint name",
+                    text,
+                ));
             };
             if !cursor.eat_word("TO") {
-                return Err(Error::parse(source, index, "expected TO in RENAME CONSTRAINT", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected TO in RENAME CONSTRAINT",
+                    text,
+                ));
             }
             let Some(to) = cursor.parse_ident() else {
-                return Err(Error::parse(source, index, "expected a new constraint name", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a new constraint name",
+                    text,
+                ));
             };
             return Ok(AlterAction::RenameConstraint { from, to });
         }
         if cursor.eat_word("TO") {
             let Some(to) = cursor.parse_ident() else {
-                return Err(Error::parse(source, index, "expected a new table name", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a new table name",
+                    text,
+                ));
             };
             return Ok(AlterAction::RenameTable { to });
         }
@@ -353,8 +411,7 @@ fn parse_action(
             text,
         ));
     }
-    let head: Vec<String> = cursor
-        .tokens()[cursor.pos()..]
+    let head: Vec<String> = cursor.tokens()[cursor.pos()..]
         .iter()
         .take(3)
         .map(std::string::ToString::to_string)
@@ -438,7 +495,7 @@ fn parse_add_constraint(
                     "NOT VALID is only allowed for CHECK and foreign-key constraints \
                      (PostgreSQL docs, ALTER TABLE, ADD table_constraint [NOT VALID])",
                     text,
-                ))
+                ));
             }
         }
     }
@@ -461,19 +518,34 @@ fn parse_alter_column(
     if cursor.eat_word("CONSTRAINT") {
         // ALTER CONSTRAINT name [DEFERRABLE|NOT DEFERRABLE] [INITIALLY ...]
         let Some(name) = cursor.parse_ident() else {
-            return Err(Error::parse(source, index, "expected a constraint name", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected a constraint name",
+                text,
+            ));
         };
         let deferrable = parse_deferrable(source, index, cursor, text)?;
         return Ok(AlterAction::AlterConstraintDeferrable { name, deferrable });
     }
     cursor.eat_word("COLUMN");
     let Some(column) = cursor.parse_ident() else {
-        return Err(Error::parse(source, index, "expected a column name after ALTER COLUMN", text));
+        return Err(Error::parse(
+            source,
+            index,
+            "expected a column name after ALTER COLUMN",
+            text,
+        ));
     };
 
     if cursor.eat_words2("SET", "DATA") {
         if !cursor.eat_word("TYPE") {
-            return Err(Error::parse(source, index, "expected TYPE after SET DATA", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected TYPE after SET DATA",
+                text,
+            ));
         }
         return parse_set_type(source, index, cursor, text, column);
     }
@@ -482,8 +554,9 @@ fn parse_alter_column(
     }
     if cursor.eat_words2("SET", "DEFAULT") {
         let expr_text = cursor.capture_until_words(&[]);
-        let expr = super::expr::normalize_expr_text(&expr_text)
-            .map_err(|e| Error::parse(source, index, format!("bad DEFAULT expression: {e}"), text))?;
+        let expr = super::expr::normalize_expr_text(&expr_text).map_err(|e| {
+            Error::parse(source, index, format!("bad DEFAULT expression: {e}"), text)
+        })?;
         return Ok(AlterAction::SetDefault { column, expr });
     }
     if cursor.eat_words2("DROP", "DEFAULT") {
@@ -491,19 +564,34 @@ fn parse_alter_column(
     }
     if cursor.eat_words2("SET", "NOT") {
         if !cursor.eat_word("NULL") {
-            return Err(Error::parse(source, index, "expected NULL after SET NOT", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected NULL after SET NOT",
+                text,
+            ));
         }
         return Ok(AlterAction::SetNotNull { column });
     }
     if cursor.eat_words2("DROP", "NOT") {
         if !cursor.eat_word("NULL") {
-            return Err(Error::parse(source, index, "expected NULL after DROP NOT", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected NULL after DROP NOT",
+                text,
+            ));
         }
         return Ok(AlterAction::DropNotNull { column });
     }
     if cursor.eat_word("ADD") {
         if !cursor.eat_word("GENERATED") {
-            return Err(Error::parse(source, index, "expected GENERATED after ADD", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected GENERATED after ADD",
+                text,
+            ));
         }
         let kind = if cursor.eat_word("ALWAYS") {
             IdentityKind::Always
@@ -569,7 +657,12 @@ fn parse_alter_column(
         if cursor.eat_word("INCREMENT") {
             cursor.eat_word("BY");
             let Some(v) = super::tokens::eat_i64(cursor) else {
-                return Err(Error::parse(source, index, "expected a number after INCREMENT BY", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a number after INCREMENT BY",
+                    text,
+                ));
             };
             return Ok(AlterAction::SetSequenceOption {
                 column,
@@ -578,7 +671,12 @@ fn parse_alter_column(
         }
         if cursor.eat_word("MINVALUE") {
             let Some(v) = super::tokens::eat_i64(cursor) else {
-                return Err(Error::parse(source, index, "expected a number after MINVALUE", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a number after MINVALUE",
+                    text,
+                ));
             };
             return Ok(AlterAction::SetSequenceOption {
                 column,
@@ -597,7 +695,12 @@ fn parse_alter_column(
         }
         if cursor.eat_word("MAXVALUE") {
             let Some(v) = super::tokens::eat_i64(cursor) else {
-                return Err(Error::parse(source, index, "expected a number after MAXVALUE", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a number after MAXVALUE",
+                    text,
+                ));
             };
             return Ok(AlterAction::SetSequenceOption {
                 column,
@@ -617,7 +720,12 @@ fn parse_alter_column(
         if cursor.eat_word("START") {
             cursor.eat_word("WITH");
             let Some(v) = super::tokens::eat_i64(cursor) else {
-                return Err(Error::parse(source, index, "expected a number after START WITH", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a number after START WITH",
+                    text,
+                ));
             };
             return Ok(AlterAction::SetSequenceOption {
                 column,
@@ -626,7 +734,12 @@ fn parse_alter_column(
         }
         if cursor.eat_word("CACHE") {
             let Some(v) = super::tokens::eat_i64(cursor) else {
-                return Err(Error::parse(source, index, "expected a number after CACHE", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a number after CACHE",
+                    text,
+                ));
             };
             return Ok(AlterAction::SetSequenceOption {
                 column,
@@ -659,7 +772,12 @@ fn parse_alter_column(
         // catalog state: accepted and ignored.
         if cursor.eat_word("WITH") {
             if super::tokens::eat_i64(cursor).is_none() {
-                return Err(Error::parse(source, index, "expected a number after RESTART WITH", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a number after RESTART WITH",
+                    text,
+                ));
             }
         } else {
             let _ = super::tokens::eat_i64(cursor);
@@ -668,13 +786,29 @@ fn parse_alter_column(
     }
     if cursor.eat_words2("SET", "EXPRESSION") {
         if !cursor.eat_word("AS") {
-            return Err(Error::parse(source, index, "expected AS in SET EXPRESSION AS", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected AS in SET EXPRESSION AS",
+                text,
+            ));
         }
         let Some(expr_text) = cursor.capture_paren_group() else {
-            return Err(Error::parse(source, index, "expected '(expression)' after SET EXPRESSION AS", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected '(expression)' after SET EXPRESSION AS",
+                text,
+            ));
         };
-        let expr = super::expr::normalize_expr_text(&expr_text)
-            .map_err(|e| Error::parse(source, index, format!("bad generation expression: {e}"), text))?;
+        let expr = super::expr::normalize_expr_text(&expr_text).map_err(|e| {
+            Error::parse(
+                source,
+                index,
+                format!("bad generation expression: {e}"),
+                text,
+            )
+        })?;
         return Ok(AlterAction::SetExpression { column, expr });
     }
     Err(Error::parse(
@@ -700,10 +834,21 @@ fn parse_set_type(
 ) -> Result<AlterAction> {
     let type_text = cursor.capture_until_words(&["COLLATE", "USING"]);
     if type_text.trim().is_empty() {
-        return Err(Error::parse(source, index, "expected a data type after TYPE", text));
+        return Err(Error::parse(
+            source,
+            index,
+            "expected a data type after TYPE",
+            text,
+        ));
     }
-    let data_type = super::datatype::normalize_type_text(&type_text)
-        .map_err(|e| Error::parse(source, index, format!("bad data type {type_text:?}: {e}"), text))?;
+    let data_type = super::datatype::normalize_type_text(&type_text).map_err(|e| {
+        Error::parse(
+            source,
+            index,
+            format!("bad data type {type_text:?}: {e}"),
+            text,
+        )
+    })?;
     if super::datatype::is_serial_family(&data_type) {
         return Err(Error::unsupported(
             source,
@@ -716,7 +861,12 @@ fn parse_set_type(
     let mut collation = None;
     if cursor.eat_word("COLLATE") {
         let Some(parts) = cursor.parse_object_name() else {
-            return Err(Error::parse(source, index, "expected a collation name after COLLATE", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected a collation name after COLLATE",
+                text,
+            ));
         };
         collation = Some(parts.join("."));
     }

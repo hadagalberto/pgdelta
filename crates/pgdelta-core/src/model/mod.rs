@@ -22,7 +22,7 @@ pub mod constraint;
 pub mod index;
 pub mod table;
 
-pub use catalog::{Catalog, Extension, Schema, PUBLIC_SCHEMA};
+pub use catalog::{Catalog, Extension, PUBLIC_SCHEMA, Schema};
 pub use constraint::{Constraint, ConstraintKind, Deferrable, FkAction, FkMatch};
 pub use index::{Index, IndexElem, IndexElemKind, NullsOrder, SortOrder};
 pub(crate) use table::sequence_type_range;

@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <03_public_schema_never_emitted/from.sql>
+-- to:   <03_public_schema_never_emitted/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+DROP TABLE "public"."ledger";
+
+COMMIT;

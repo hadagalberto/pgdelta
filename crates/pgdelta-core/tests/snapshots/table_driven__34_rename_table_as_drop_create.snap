@@ -1,0 +1,22 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <34_rename_table_as_drop_create/from.sql>
+-- to:   <34_rename_table_as_drop_create/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+DROP TABLE "public"."members";
+
+CREATE TABLE "public"."users" (
+    "id" bigint NOT NULL,
+    "email" text,
+    CONSTRAINT "users_pkey" PRIMARY KEY ("id")
+);
+
+COMMIT;

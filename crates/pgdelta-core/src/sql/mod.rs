@@ -301,7 +301,7 @@ fn parse_statement(source: &str, index: usize, stmt: &StatementTokens) -> Result
                 index,
                 "expected a SQL keyword to start the statement",
                 &text,
-            ))
+            ));
         }
     };
     // Consume the verb so every sub-parser starts on its own grammar.
@@ -346,7 +346,9 @@ fn parse_create_dispatch(
         _ => String::new(),
     };
     match (second.as_str(), third.as_str()) {
-        ("INDEX", _) | ("UNIQUE", "INDEX") => index::parse_create_index(source, index, cursor, text),
+        ("INDEX", _) | ("UNIQUE", "INDEX") => {
+            index::parse_create_index(source, index, cursor, text)
+        }
         ("SCHEMA", _) => misc::parse_create_schema(source, index, cursor, text),
         ("EXTENSION", _) => misc::parse_create_extension(source, index, cursor, text),
         _ => create_table::parse_create(source, index, cursor, text),
@@ -368,7 +370,7 @@ fn parse_drop(
                 index,
                 "expected SCHEMA, EXTENSION, TABLE or INDEX after DROP",
                 text,
-            ))
+            ));
         }
     };
     match object_name.as_str() {
@@ -400,7 +402,7 @@ fn parse_alter(
                 index,
                 "expected TABLE or INDEX after ALTER",
                 text,
-            ))
+            ));
         }
     };
     match object_name.as_str() {
@@ -439,19 +441,34 @@ pub(crate) fn parse_sequence_options_paren(
         if cursor.eat_words(&["INCREMENT"]) {
             cursor.eat_word("BY");
             let Some(v) = tokens::eat_i64(cursor) else {
-                return Err(Error::parse(source, index, "expected a number after INCREMENT BY", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a number after INCREMENT BY",
+                    text,
+                ));
             };
             opts.increment = Some(v);
         } else if cursor.eat_words(&["MINVALUE"]) {
             let Some(v) = tokens::eat_i64(cursor) else {
-                return Err(Error::parse(source, index, "expected a number after MINVALUE", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a number after MINVALUE",
+                    text,
+                ));
             };
             opts.minvalue = Some(v);
         } else if cursor.eat_words2("NO", "MINVALUE") {
             // NO MINVALUE selects the default, which is what `None` models.
         } else if cursor.eat_words(&["MAXVALUE"]) {
             let Some(v) = tokens::eat_i64(cursor) else {
-                return Err(Error::parse(source, index, "expected a number after MAXVALUE", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a number after MAXVALUE",
+                    text,
+                ));
             };
             opts.maxvalue = Some(v);
         } else if cursor.eat_words2("NO", "MAXVALUE") {
@@ -459,12 +476,22 @@ pub(crate) fn parse_sequence_options_paren(
         } else if cursor.eat_word("START") {
             cursor.eat_word("WITH");
             let Some(v) = tokens::eat_i64(cursor) else {
-                return Err(Error::parse(source, index, "expected a number after START WITH", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a number after START WITH",
+                    text,
+                ));
             };
             opts.start = Some(v);
         } else if cursor.eat_word("CACHE") {
             let Some(v) = tokens::eat_i64(cursor) else {
-                return Err(Error::parse(source, index, "expected a number after CACHE", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a number after CACHE",
+                    text,
+                ));
             };
             opts.cache = Some(v);
         } else if cursor.eat_word("CYCLE") {
@@ -497,9 +524,13 @@ pub(crate) fn parse_sequence_options_paren(
         if cursor.eat_rparen() {
             break;
         }
-        if !cursor.eat_comma() {
-            return Err(Error::parse(source, index, "expected ',' or ')' in sequence options", text));
-        }
+        // PostgreSQL's `seqopt_list` permits options separated by whitespace
+        // alone as well as by commas (CREATE SEQUENCE synopsis and grammar).
+        // The canonical renderer emits the whitespace form, so both must be
+        // accepted here: a comma is optional between options. The loop head
+        // still rejects any token that is not a real option, so progress is
+        // always made and malformed input is never silently skipped.
+        let _ = cursor.eat_comma();
     }
     Ok(opts)
 }
@@ -530,12 +561,23 @@ pub(crate) fn normalize_sequence_options(
     };
     let increment = opts.increment.unwrap_or(1);
     if increment == 0 {
-        return Err(Error::invalid(source, index, "sequence INCREMENT must be nonzero", text));
+        return Err(Error::invalid(
+            source,
+            index,
+            "sequence INCREMENT must be nonzero",
+            text,
+        ));
     }
     let ascending = increment > 0;
-    let minvalue = opts.minvalue.unwrap_or(if ascending { 1 } else { type_min });
-    let maxvalue = opts.maxvalue.unwrap_or(if ascending { type_max } else { -1 });
-    let start = opts.start.unwrap_or(if ascending { minvalue } else { maxvalue });
+    let minvalue = opts
+        .minvalue
+        .unwrap_or(if ascending { 1 } else { type_min });
+    let maxvalue = opts
+        .maxvalue
+        .unwrap_or(if ascending { type_max } else { -1 });
+    let start = opts
+        .start
+        .unwrap_or(if ascending { minvalue } else { maxvalue });
     Ok(SequenceOptions {
         increment,
         minvalue,
@@ -572,14 +614,25 @@ pub(crate) fn parse_fk_actions(
                 text,
             ));
         } else {
-            return Err(Error::parse(source, index, "expected FULL, PARTIAL or SIMPLE after MATCH", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected FULL, PARTIAL or SIMPLE after MATCH",
+                text,
+            ));
         };
     }
     loop {
         let (which, action) = if cursor.eat_words2("ON", "DELETE") {
-            (&mut on_delete, parse_one_fk_action(source, index, cursor, text)?)
+            (
+                &mut on_delete,
+                parse_one_fk_action(source, index, cursor, text)?,
+            )
         } else if cursor.eat_words2("ON", "UPDATE") {
-            (&mut on_update, parse_one_fk_action(source, index, cursor, text)?)
+            (
+                &mut on_update,
+                parse_one_fk_action(source, index, cursor, text)?,
+            )
         } else {
             break;
         };

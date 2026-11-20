@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <15_identity_drop/from.sql>
+-- to:   <15_identity_drop/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TABLE "public"."users" ALTER COLUMN "id" DROP NOT NULL;
+
+ALTER TABLE "public"."users" ALTER COLUMN "id" DROP IDENTITY;
+
+COMMIT;

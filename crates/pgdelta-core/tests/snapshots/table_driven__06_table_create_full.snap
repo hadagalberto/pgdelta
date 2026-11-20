@@ -1,0 +1,25 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <06_table_create_full/from.sql>
+-- to:   <06_table_create_full/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE TABLE "public"."users" (
+    "id" bigint GENERATED ALWAYS AS IDENTITY (INCREMENT BY 1 MINVALUE 1 MAXVALUE 9223372036854775807 START WITH 1 CACHE 1 NO CYCLE) NOT NULL,
+    "email" character varying(255) NOT NULL,
+    "display_name" text COLLATE "C",
+    "is_active" boolean DEFAULT true,
+    "score" numeric(8,2),
+    CONSTRAINT "users_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "users_email_key" UNIQUE ("email"),
+    CONSTRAINT "users_score_nonneg" CHECK ("score" >= 0)
+);
+
+COMMIT;

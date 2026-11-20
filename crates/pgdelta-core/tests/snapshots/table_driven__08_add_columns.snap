@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <08_add_columns/from.sql>
+-- to:   <08_add_columns/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TABLE "public"."users" ADD COLUMN "email" text DEFAULT 'unknown@example.com' NOT NULL;
+
+ALTER TABLE "public"."users" ADD COLUMN "score" numeric(8,2);
+
+COMMIT;

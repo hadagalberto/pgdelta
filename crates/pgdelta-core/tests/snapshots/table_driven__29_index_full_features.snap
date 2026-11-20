@@ -1,0 +1,20 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <29_index_full_features/from.sql>
+-- to:   <29_index_full_features/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE INDEX "public"."idx_events_created_brin" ON "public"."events" USING "brin" ("created_at");
+
+CREATE INDEX "public"."idx_events_kind_created" ON "public"."events" ("kind" "text_pattern_ops" DESC NULLS LAST, "created_at") INCLUDE ("body") WITH ("fillfactor" = 70) WHERE "kind" is not null;
+
+CREATE INDEX "public"."idx_events_lower_body" ON "public"."events" (("lower"("body")));
+
+COMMIT;

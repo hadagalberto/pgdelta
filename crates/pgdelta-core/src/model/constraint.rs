@@ -121,7 +121,10 @@ fn with_columns(action: &str, columns: &[String]) -> String {
     if columns.is_empty() {
         action.to_owned()
     } else {
-        let cols: Vec<String> = columns.iter().map(|c| crate::naming::quote_ident(c)).collect();
+        let cols: Vec<String> = columns
+            .iter()
+            .map(|c| crate::naming::quote_ident(c))
+            .collect();
         format!("{action} ({})", cols.join(", "))
     }
 }

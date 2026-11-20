@@ -1,0 +1,30 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <35_auto_names_on_create/from.sql>
+-- to:   <35_auto_names_on_create/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE TABLE "public"."t" (
+    "a" integer NOT NULL,
+    "b" text,
+    CONSTRAINT "t_pkey" PRIMARY KEY ("a"),
+    CONSTRAINT "t_b_key" UNIQUE ("b"),
+    CONSTRAINT "explicit_name" CHECK ("b" <> '')
+);
+
+CREATE TABLE "public"."t2" (
+    "a" integer,
+    CONSTRAINT "t2_a_check" CHECK ("a" > 0),
+    CONSTRAINT "t2_check" CHECK ("a" < 10)
+);
+
+ALTER TABLE "public"."t" ADD CONSTRAINT "t_a_fkey" FOREIGN KEY ("a") REFERENCES "public"."u" ("id");
+
+COMMIT;

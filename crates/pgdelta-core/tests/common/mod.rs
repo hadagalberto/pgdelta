@@ -6,9 +6,12 @@
 //!
 //! 1. the rendered migration script snapshots deterministically (insta);
 //! 2. applying the rendered script to the `from` model reproduces the
-//!    `to` model, modulo column order — PostgreSQL cannot reorder
-//!    columns without a destructive rewrite, so pgdelta never plans a
-//!    reorder and the oracle must (and may) ignore physical order.
+//!    `to` model, modulo column and constraint order — PostgreSQL cannot
+//!    reorder columns without a destructive rewrite, so pgdelta never plans
+//!    a reorder, and a foreign key added after `CREATE TABLE` has no
+//!    meaningful catalog position relative to inline constraints. Neither
+//!    order is part of the schema's semantics, so the oracle compares both
+//!    as name-sorted sets.
 //!
 //! A case may carry a `min_pg_version.txt` file (e.g. `15`) when its SQL
 //! uses syntax newer than PostgreSQL 13: the live-database test skips it
@@ -18,7 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
-use pgdelta_core::model::{Catalog, Table, PUBLIC_SCHEMA};
+use pgdelta_core::model::{Catalog, PUBLIC_SCHEMA, Table};
 use pgdelta_core::{apply_sql_to, catalog_from_sql, plan};
 
 /// One table-driven case.
@@ -78,14 +81,20 @@ pub fn run_case(case: &Case) -> String {
     let from = catalog_from_sql(&case.from_sql, "from.sql").expect("parsing from.sql");
     let to = catalog_from_sql(&case.to_sql, "to.sql").expect("parsing to.sql");
 
-    let planned = plan(&from, &to, &format!("<{}/from.sql>", case.name), &format!("<{}/to.sql>", case.name))
-        .expect("planning");
+    let planned = plan(
+        &from,
+        &to,
+        &format!("<{}/from.sql>", case.name),
+        &format!("<{}/to.sql>", case.name),
+    )
+    .expect("planning");
     let script = pgdelta_core::plan::render_sql(&planned);
 
     // Convergence oracle: applying the script to the `from` model must
     // reproduce the `to` model (modulo physical column order).
     let mut converged = from.clone();
-    apply_sql_to(&mut converged, &script, "migration.sql").expect("applying the generated migration");
+    apply_sql_to(&mut converged, &script, "migration.sql")
+        .expect("applying the generated migration");
     assert_equivalent(&converged, &to, &case.name);
 
     script
@@ -116,15 +125,17 @@ pub fn assert_equivalent(actual: &Catalog, expected: &Catalog, context: &str) {
 
     let mut actual_tables: Vec<Table> = actual.tables.values().cloned().collect();
     let mut expected_tables: Vec<Table> = expected.tables.values().cloned().collect();
-    for table in actual_tables.iter_mut() {
+    for table in &mut actual_tables {
         table.columns.sort_by(|a, b| a.name.cmp(&b.name));
+        table.constraints.sort_by(|a, b| a.name.cmp(&b.name));
     }
-    for table in expected_tables.iter_mut() {
+    for table in &mut expected_tables {
         table.columns.sort_by(|a, b| a.name.cmp(&b.name));
+        table.constraints.sort_by(|a, b| a.name.cmp(&b.name));
     }
     assert_eq!(
         actual_tables, expected_tables,
-        "{context}: tables diverge (by-name column comparison)"
+        "{context}: tables diverge (by-name column/constraint comparison)"
     );
 
     let mut actual_indexes: Vec<_> = actual.indexes.values().cloned().collect();

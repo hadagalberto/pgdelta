@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <01_schema_create/from.sql>
+-- to:   <01_schema_create/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE SCHEMA "reporting";
+
+CREATE SCHEMA "sales";
+
+COMMIT;

@@ -1,0 +1,46 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <36_multi_schema_ordering/from.sql>
+-- to:   <36_multi_schema_ordering/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE SCHEMA "crm";
+
+CREATE SCHEMA "sales";
+
+CREATE TABLE "crm"."contacts" (
+    "id" bigint NOT NULL,
+    CONSTRAINT "contacts_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "crm"."notes" (
+    "id" bigint NOT NULL,
+    "contact_id" bigint,
+    CONSTRAINT "notes_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "sales"."customers" (
+    "id" bigint NOT NULL,
+    "region" text,
+    CONSTRAINT "customers_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "sales"."regions" (
+    "id" bigint NOT NULL,
+    CONSTRAINT "regions_pkey" PRIMARY KEY ("id")
+);
+
+ALTER TABLE "crm"."notes" ADD CONSTRAINT "notes_contact_id_fkey" FOREIGN KEY ("contact_id") REFERENCES "crm"."contacts" ("id");
+
+ALTER TABLE "sales"."customers" ADD CONSTRAINT "customers_region_fkey" FOREIGN KEY ("region") REFERENCES "sales"."regions" ("id");
+
+CREATE INDEX "sales"."idx_sales_customers_region" ON "sales"."customers" ("region");
+
+COMMIT;

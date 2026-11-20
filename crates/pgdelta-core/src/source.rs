@@ -145,15 +145,16 @@ pub fn apply_sql_to(catalog: &mut Catalog, sql_text: &str, source_name: &str) ->
 /// Returns an error when the text cannot be tokenized.
 pub fn split_sql_statements(sql_text: &str) -> Result<Vec<String>> {
     let sql_text = sql_text.strip_prefix('\u{feff}').unwrap_or(sql_text);
-    let statements = sql::tokens::split_statements(sql_text).map_err(|e| {
-        Error::Parse {
-            origin: "<sql>".to_owned(),
-            index: 0,
-            message: format!("tokenization failed: {e}"),
-            statement: String::new(),
-        }
+    let statements = sql::tokens::split_statements(sql_text).map_err(|e| Error::Parse {
+        origin: "<sql>".to_owned(),
+        index: 0,
+        message: format!("tokenization failed: {e}"),
+        statement: String::new(),
     })?;
-    Ok(statements.iter().map(|s| s.text()).collect())
+    Ok(statements
+        .iter()
+        .map(crate::sql::tokens::StatementTokens::text)
+        .collect())
 }
 
 fn read_file(path: &Path) -> Result<String> {
@@ -181,9 +182,14 @@ fn collect_sql_files(dir: &Path) -> Result<Vec<PathBuf>> {
             let path = entry.path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("sql")) {
-                let rel = path
-                    .strip_prefix(dir).map_or_else(|_| path.to_string_lossy().into_owned(), |p| p.to_string_lossy().replace('\\', "/"));
+            } else if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("sql"))
+            {
+                let rel = path.strip_prefix(dir).map_or_else(
+                    |_| path.to_string_lossy().into_owned(),
+                    |p| p.to_string_lossy().replace('\\', "/"),
+                );
                 files.push((rel, path));
             }
         }

@@ -38,12 +38,10 @@ pub(crate) fn parse_expr_text(text: &str) -> Result<Expr> {
     })?;
     let expr = match statements.into_iter().next() {
         Some(sqlparser::ast::Statement::Query(query)) => match *query.body {
-            sqlparser::ast::SetExpr::Select(select) => {
-                match select.projection.into_iter().next() {
-                    Some(sqlparser::ast::SelectItem::UnnamedExpr(expr)) => Some(expr),
-                    _ => None,
-                }
-            }
+            sqlparser::ast::SetExpr::Select(select) => match select.projection.into_iter().next() {
+                Some(sqlparser::ast::SelectItem::UnnamedExpr(expr)) => Some(expr),
+                _ => None,
+            },
             _ => None,
         },
         _ => None,
@@ -65,7 +63,7 @@ pub(crate) fn normalize_expr_text(text: &str) -> Result<String> {
 /// documentation table "Operator Precedence (highest to lowest)"
 /// (PostgreSQL docs §4.1.6). All binary operators are left-associative.
 fn binary_precedence(op: &BinaryOperator) -> u8 {
-    use BinaryOperator::{Or, And, Eq, NotEq, Lt, LtEq, Gt, GtEq, Spaceship};
+    use BinaryOperator::{And, Eq, Gt, GtEq, Lt, LtEq, NotEq, Or, Spaceship};
     match op {
         Or => 1,
         And => 2,
@@ -99,9 +97,10 @@ pub(crate) fn render_expr(expr: &Expr) -> Result<String> {
 
 fn render_inner(expr: &Expr) -> Result<String> {
     match expr {
-        Expr::Identifier(ident) => {
-            Ok(quote_ident(&folded(&ident.value, ident.quote_style.is_some())))
-        }
+        Expr::Identifier(ident) => Ok(quote_ident(&folded(
+            &ident.value,
+            ident.quote_style.is_some(),
+        ))),
         Expr::CompoundIdentifier(idents) => Ok(idents
             .iter()
             .map(|i| quote_ident(&folded(&i.value, i.quote_style.is_some())))
@@ -184,7 +183,7 @@ fn render_inner(expr: &Expr) -> Result<String> {
                     return Err(crate::Error::Serialization(
                         "subquery function arguments are not supported in modelled expressions"
                             .to_owned(),
-                    ))
+                    ));
                 }
             };
             let _ = parameters;
@@ -197,13 +196,15 @@ fn render_inner(expr: &Expr) -> Result<String> {
                     other => {
                         return Err(crate::Error::Serialization(format!(
                             "unsupported function argument shape {other:?}"
-                        )))
+                        )));
                     }
                 }
             }
             Ok(format!("{name_rendered}({})", parts.join(", ")))
         }
-        Expr::Cast { expr, data_type, .. } => {
+        Expr::Cast {
+            expr, data_type, ..
+        } => {
             let inner = render_inner(expr)?;
             let ty = render_cast_type(data_type)?;
             Ok(format!("CAST({inner} AS {ty})"))
@@ -238,7 +239,10 @@ fn render_inner(expr: &Expr) -> Result<String> {
             Ok(format!("{e} {neg}between {l} and {h}"))
         }
         Expr::InList {
-            expr, list, negated, ..
+            expr,
+            list,
+            negated,
+            ..
         } => {
             let e = render_inner(expr)?;
             let items = list.iter().map(render_inner).collect::<Result<Vec<_>>>()?;
@@ -305,7 +309,9 @@ fn render_object_name(name: &sqlparser::ast::ObjectName) -> Result<String> {
 }
 
 fn render_binary_op(op: &BinaryOperator) -> Result<&'static str> {
-    use BinaryOperator::{Plus, Minus, Multiply, Divide, Modulo, Gt, Lt, GtEq, LtEq, Eq, NotEq, And, Or, StringConcat};
+    use BinaryOperator::{
+        And, Divide, Eq, Gt, GtEq, Lt, LtEq, Minus, Modulo, Multiply, NotEq, Or, Plus, StringConcat,
+    };
     Ok(match op {
         Plus => "+",
         Minus => "-",
@@ -324,13 +330,16 @@ fn render_binary_op(op: &BinaryOperator) -> Result<&'static str> {
         other => {
             return Err(crate::Error::Serialization(format!(
                 "unsupported binary operator {other:?} in expression"
-            )))
+            )));
         }
     })
 }
 
 fn render_value(value: &sqlparser::ast::Value) -> Result<String> {
-    use sqlparser::ast::Value::{Number, SingleQuotedString, EscapedStringLiteral, UnicodeStringLiteral, DollarQuotedString, SingleQuotedByteStringLiteral, Boolean, Null};
+    use sqlparser::ast::Value::{
+        Boolean, DollarQuotedString, EscapedStringLiteral, Null, Number,
+        SingleQuotedByteStringLiteral, SingleQuotedString, UnicodeStringLiteral,
+    };
     match value {
         Number(n, _) => Ok(n.clone()),
         SingleQuotedString(s) | EscapedStringLiteral(s) => Ok(render_string_literal(s)),

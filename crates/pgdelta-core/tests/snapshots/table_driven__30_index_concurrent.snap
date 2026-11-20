@@ -1,0 +1,15 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <30_index_concurrent/from.sql>
+-- to:   <30_index_concurrent/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+
+-- Non-transactional section (cannot run inside a transaction block):
+
+CREATE INDEX CONCURRENTLY "public"."idx_events_kind" ON "public"."events" ("kind");

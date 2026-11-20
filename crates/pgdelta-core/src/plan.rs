@@ -39,7 +39,7 @@ use crate::model::{
     Catalog, Column, Constraint, ConstraintKind, Deferrable, FkAction, FkMatch, Index,
     IndexElemKind, NullsOrder, SortOrder, Table,
 };
-use crate::naming::{quote_ident, qualified};
+use crate::naming::{qualified, quote_ident};
 use crate::sql::sequence_options_to_sql;
 
 /// A single planned statement.
@@ -278,20 +278,35 @@ pub fn plan(from: &Catalog, to: &Catalog, from_desc: &str, to_desc: &str) -> Res
                     qualified(&table.schema, &table.name),
                     render_create_table(table),
                 ));
-                // Inline non-FK constraints ship with the table; FKs are
-                // added afterwards so that forward references and mutual
-                // references never fail.
+                // Inline non-FK, valid constraints ship with the table;
+                // FKs are added afterwards so that forward references and
+                // mutual references never fail. `NOT VALID` constraints
+                // cannot appear in CREATE TABLE (PostgreSQL docs, ALTER
+                // TABLE, ADD ... NOT VALID), so they are added separately.
                 for constraint in &table.constraints {
                     if matches!(constraint.kind, ConstraintKind::ForeignKey { .. }) {
                         nodes.push(node(
                             rank::ADD_FOREIGN_KEY,
+                            format!("add-fk:{}:{}:{}", table.schema, table.name, constraint.name),
+                            "alter",
+                            format!("{}.{}", table.name, constraint.name),
+                            render_add_fk(&table.schema, &table.name, constraint),
+                        ));
+                    } else if constraint.not_valid {
+                        nodes.push(node(
+                            rank::ALTER,
                             format!(
-                                "add-fk:{}:{}:{}",
+                                "add-not-valid:{}:{}:{}",
                                 table.schema, table.name, constraint.name
                             ),
                             "alter",
                             format!("{}.{}", table.name, constraint.name),
-                            render_add_fk(&table.schema, &table.name, constraint),
+                            format!(
+                                "ALTER TABLE {} ADD CONSTRAINT {} {};",
+                                qualified(&table.schema, &table.name),
+                                quote_ident(&constraint.name),
+                                render_constraint_body(constraint)
+                            ),
                         ));
                     }
                 }
@@ -314,13 +329,19 @@ pub fn plan(from: &Catalog, to: &Catalog, from_desc: &str, to_desc: &str) -> Res
                 let (rank_value, key, transactional) = if index.concurrent {
                     (
                         rank::CREATE_INDEX_CONCURRENTLY,
-                        format!("create-index-c:{}:{}", index.table, index.name),
+                        format!(
+                            "create-index-c:{}:{}:{}",
+                            index.schema, index.table, index.name
+                        ),
                         false,
                     )
                 } else {
                     (
                         rank::CREATE_INDEX,
-                        format!("create-index:{}:{}", index.table, index.name),
+                        format!(
+                            "create-index:{}:{}:{}",
+                            index.schema, index.table, index.name
+                        ),
                         true,
                     )
                 };
@@ -345,8 +366,11 @@ pub fn plan(from: &Catalog, to: &Catalog, from_desc: &str, to_desc: &str) -> Res
     let mut sections = Vec::new();
     let transactional: Vec<PlanStatement> =
         sorted.iter().filter(|s| s.transactional).cloned().collect();
-    let non_transactional: Vec<PlanStatement> =
-        sorted.iter().filter(|s| !s.transactional).cloned().collect();
+    let non_transactional: Vec<PlanStatement> = sorted
+        .iter()
+        .filter(|s| !s.transactional)
+        .cloned()
+        .collect();
     if !transactional.is_empty() {
         sections.push(PlanSection {
             transactional: true,
@@ -557,17 +581,17 @@ fn render_alter_statements(
                     rank::ADD_FOREIGN_KEY,
                     format!("add-fk:{}", constraint.name),
                     format!("{table}.{}", constraint.name),
-                    format!(
-                        "ALTER TABLE {target} ADD CONSTRAINT {};",
-                        render_constraint_body(constraint)
-                    ),
+                    render_add_fk(schema, table, constraint),
                 )]
             } else {
                 vec![(
                     rank::ALTER,
                     format!("add-constraint:{}", constraint.name),
                     format!("{table}.{}", constraint.name),
-                    format!("ALTER TABLE {target} ADD CONSTRAINT {body};"),
+                    format!(
+                        "ALTER TABLE {target} ADD CONSTRAINT {} {body};",
+                        quote_ident(&constraint.name)
+                    ),
                 )]
             }
         }
@@ -621,7 +645,9 @@ fn render_create_table(table: &Table) -> String {
         lines.push(format!("    {}", render_column_def(column)));
     }
     for constraint in &table.constraints {
-        if !matches!(constraint.kind, ConstraintKind::ForeignKey { .. }) {
+        // PostgreSQL forbids `NOT VALID` inside CREATE TABLE; the planner
+        // emits those constraints as separate ALTER statements.
+        if !matches!(constraint.kind, ConstraintKind::ForeignKey { .. }) && !constraint.not_valid {
             lines.push(format!(
                 "    CONSTRAINT {} {}",
                 quote_ident(&constraint.name),
@@ -651,10 +677,7 @@ fn render_column_def(column: &Column) -> String {
         out.push_str(&format!(" DEFAULT {default}"));
     }
     if let Some(generated) = &column.generated {
-        out.push_str(&format!(
-            " GENERATED ALWAYS AS ({}) STORED",
-            generated.expr
-        ));
+        out.push_str(&format!(" GENERATED ALWAYS AS ({}) STORED", generated.expr));
     }
     if let Some(identity) = &column.identity {
         out.push(' ');
@@ -837,7 +860,11 @@ fn render_create_index(index: &Index) -> String {
 }
 
 fn render_ident_list(idents: &[String]) -> String {
-    idents.iter().map(|i| quote_ident(i)).collect::<Vec<_>>().join(", ")
+    idents
+        .iter()
+        .map(|i| quote_ident(i))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Renders a canonical type string. Builtins are display-ready;
@@ -851,7 +878,10 @@ fn render_type(canonical: &str) -> String {
 
 /// Renders a dotted name with every part quoted.
 fn quote_parts(name: &str) -> String {
-    name.split('.').map(quote_ident).collect::<Vec<_>>().join(".")
+    name.split('.')
+        .map(quote_ident)
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// Renders a collation name (parts quoted individually).

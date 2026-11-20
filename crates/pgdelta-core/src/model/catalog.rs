@@ -121,11 +121,7 @@ impl Catalog {
     #[must_use]
     pub fn to_json(&self) -> Value {
         fn schemas(c: &Catalog) -> Value {
-            serde_json::json!(c
-                .schemas
-                .values()
-                .map(|s| &s.name)
-                .collect::<Vec<_>>())
+            serde_json::json!(c.schemas.values().map(|s| &s.name).collect::<Vec<_>>())
         }
         fn extensions(c: &Catalog) -> Value {
             serde_json::json!(c.extensions.values().collect::<Vec<_>>())

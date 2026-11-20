@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <33_rename_column_as_drop_add/from.sql>
+-- to:   <33_rename_column_as_drop_add/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TABLE "public"."users" DROP COLUMN "email";
+
+ALTER TABLE "public"."users" ADD COLUMN "mail" text NOT NULL;
+
+COMMIT;

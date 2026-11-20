@@ -23,7 +23,9 @@ pub enum Error {
 
     /// The statement parses, but is not something pgdelta models in this
     /// milestone.
-    #[error("unsupported statement in {origin} (statement {index}): {message}\n  statement: {statement}")]
+    #[error(
+        "unsupported statement in {origin} (statement {index}): {message}\n  statement: {statement}"
+    )]
     Unsupported {
         /// Name of the source.
         origin: String,
@@ -38,7 +40,9 @@ pub enum Error {
     /// The statement is well-formed but describes an invalid or
     /// inconsistent state, mirroring an error PostgreSQL itself would
     /// raise.
-    #[error("invalid statement in {origin} (statement {index}): {message}\n  statement: {statement}")]
+    #[error(
+        "invalid statement in {origin} (statement {index}): {message}\n  statement: {statement}"
+    )]
     Invalid {
         /// Name of the source.
         origin: String,

@@ -42,7 +42,12 @@ pub(crate) fn parse_create_index(
         )
     };
     if !cursor.eat_word("ON") {
-        return Err(Error::parse(source, index, "expected ON before the table name", text));
+        return Err(Error::parse(
+            source,
+            index,
+            "expected ON before the table name",
+            text,
+        ));
     }
     if cursor.eat_word("ONLY") {
         return Err(Error::unsupported(
@@ -54,14 +59,24 @@ pub(crate) fn parse_create_index(
         ));
     }
     let Some(mut table) = cursor.parse_object_name() else {
-        return Err(Error::parse(source, index, "expected a table name after ON", text));
+        return Err(Error::parse(
+            source,
+            index,
+            "expected a table name after ON",
+            text,
+        ));
     };
     truncate_parts(&mut table);
 
     let mut method = None;
     if cursor.eat_word("USING") {
         let Some(parts) = cursor.parse_object_name() else {
-            return Err(Error::parse(source, index, "expected an index method after USING", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected an index method after USING",
+                text,
+            ));
         };
         let m = parts.join(".");
         // Explicit USING btree is the default; normalise it away so that
@@ -72,13 +87,23 @@ pub(crate) fn parse_create_index(
     }
 
     let Some(columns) = parse_index_elems(source, index, cursor, text)? else {
-        return Err(Error::parse(source, index, "expected an index element list", text));
+        return Err(Error::parse(
+            source,
+            index,
+            "expected an index element list",
+            text,
+        ));
     };
 
     let mut include = Vec::new();
     if cursor.eat_word("INCLUDE") {
         let Some(cols) = cursor.parse_ident_list_paren() else {
-            return Err(Error::parse(source, index, "expected a column list after INCLUDE", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected a column list after INCLUDE",
+                text,
+            ));
         };
         include = cols;
     }
@@ -87,11 +112,21 @@ pub(crate) fn parse_create_index(
     if cursor.eat_word("NULLS") {
         if cursor.eat_word("NOT") {
             if !cursor.eat_word("DISTINCT") {
-                return Err(Error::parse(source, index, "expected DISTINCT after NULLS NOT", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected DISTINCT after NULLS NOT",
+                    text,
+                ));
             }
             nulls_distinct = false;
         } else if !cursor.eat_word("DISTINCT") {
-            return Err(Error::parse(source, index, "expected [NOT] DISTINCT after NULLS", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected [NOT] DISTINCT after NULLS",
+                text,
+            ));
         }
     }
 
@@ -103,7 +138,12 @@ pub(crate) fn parse_create_index(
         }
         loop {
             let Some(key) = cursor.parse_ident() else {
-                return Err(Error::parse(source, index, "expected a storage parameter name in WITH (...)", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a storage parameter name in WITH (...)",
+                    text,
+                ));
             };
             let mut value = "on".to_owned();
             if matches!(cursor.peek(), Some(sqlparser::tokenizer::Token::Eq)) {
@@ -117,7 +157,12 @@ pub(crate) fn parse_create_index(
                 break;
             }
             if !cursor.eat_comma() {
-                return Err(Error::parse(source, index, "expected ',' or ')' in WITH (...)", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected ',' or ')' in WITH (...)",
+                    text,
+                ));
             }
         }
     }
@@ -125,7 +170,12 @@ pub(crate) fn parse_create_index(
     let mut tablespace = None;
     if cursor.eat_word("TABLESPACE") {
         let Some(ts) = cursor.parse_ident() else {
-            return Err(Error::parse(source, index, "expected a tablespace name", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected a tablespace name",
+                text,
+            ));
         };
         tablespace = Some(ts);
     }
@@ -134,16 +184,26 @@ pub(crate) fn parse_create_index(
     if cursor.eat_word("WHERE") {
         let pred_text = cursor.capture_until_words(&[]);
         if pred_text.trim().is_empty() {
-            return Err(Error::parse(source, index, "expected a predicate after WHERE", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected a predicate after WHERE",
+                text,
+            ));
         }
-        predicate = Some(
-            super::expr::normalize_expr_text(&pred_text)
-                .map_err(|e| Error::parse(source, index, format!("bad index predicate: {e}"), text))?,
-        );
+        predicate =
+            Some(super::expr::normalize_expr_text(&pred_text).map_err(|e| {
+                Error::parse(source, index, format!("bad index predicate: {e}"), text)
+            })?);
     }
 
     if !cursor.is_empty() {
-        return Err(Error::parse(source, index, "unexpected trailing tokens after the index definition", text));
+        return Err(Error::parse(
+            source,
+            index,
+            "unexpected trailing tokens after the index definition",
+            text,
+        ));
     }
     if !unique && !nulls_distinct {
         return Err(Error::invalid(
@@ -218,10 +278,26 @@ fn parse_index_elem(
             .map_err(|e| Error::parse(source, index, format!("bad index expression: {e}"), text))?;
         IndexElemKind::Expression(expr)
     } else {
-        let Some(col) = cursor.parse_ident() else {
+        let Some(first) = cursor.parse_ident() else {
             return Ok(None);
         };
-        IndexElemKind::Column(col)
+        if cursor.at_lparen() {
+            // PostgreSQL docs, CREATE INDEX, `expression`: "The expression
+            // usually must be written with surrounding parentheses ...
+            // However, the parentheses can be omitted if the expression has
+            // the form of a function call." Capture `lower(body)` as one
+            // expression rather than a column followed by stray tokens.
+            let Some(args) = cursor.capture_paren_group() else {
+                return Ok(None);
+            };
+            let expr_text = format!("{first}({args})");
+            let expr = super::expr::normalize_expr_text(&expr_text).map_err(|e| {
+                Error::parse(source, index, format!("bad index expression: {e}"), text)
+            })?;
+            IndexElemKind::Expression(expr)
+        } else {
+            IndexElemKind::Column(first)
+        }
     };
 
     let mut collation = None;
@@ -237,16 +313,19 @@ fn parse_index_elem(
     // [ ( opclass_parameter = value [, ... ] ) ]`).
     let mut opclass = None;
     let mut opclass_params = None;
-    if !cursor.at_word("ASC") && !cursor.at_word("DESC") && !cursor.at_word("NULLS")
-        && let Some(parts) = cursor.parse_object_name() {
-            opclass = Some(parts.join("."));
-            if cursor.at_lparen() {
-                let Some(params) = cursor.capture_paren_group() else {
-                    return Ok(None);
-                };
-                opclass_params = Some(params);
-            }
+    if !cursor.at_word("ASC")
+        && !cursor.at_word("DESC")
+        && !cursor.at_word("NULLS")
+        && let Some(parts) = cursor.parse_object_name()
+    {
+        opclass = Some(parts.join("."));
+        if cursor.at_lparen() {
+            let Some(params) = cursor.capture_paren_group() else {
+                return Ok(None);
+            };
+            opclass_params = Some(params);
         }
+    }
 
     let mut order = None;
     if cursor.eat_word("ASC") {
@@ -310,10 +389,7 @@ pub(crate) fn parse_drop_index(
         ));
     }
     cursor.eat_word("RESTRICT");
-    Ok(ParsedStatement::DropIndex {
-        names,
-        if_exists,
-    })
+    Ok(ParsedStatement::DropIndex { names, if_exists })
 }
 
 /// Parses `ALTER INDEX [IF EXISTS] name RENAME TO new_name` (the only
@@ -339,10 +415,20 @@ pub(crate) fn parse_alter_index(
         ));
     }
     if !cursor.eat_word("TO") {
-        return Err(Error::parse(source, index, "expected TO after RENAME", text));
+        return Err(Error::parse(
+            source,
+            index,
+            "expected TO after RENAME",
+            text,
+        ));
     }
     let Some(new_name) = cursor.parse_ident() else {
-        return Err(Error::parse(source, index, "expected a new index name", text));
+        return Err(Error::parse(
+            source,
+            index,
+            "expected a new index name",
+            text,
+        ));
     };
     let _ = if_exists;
     Ok(ParsedStatement::AlterIndexRename { name, new_name })

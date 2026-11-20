@@ -12,8 +12,8 @@ use sqlparser::ast::Statement;
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
 
-use super::tokens::{Cursor, StatementTokens};
 use super::ParsedStatement;
+use super::tokens::{Cursor, StatementTokens};
 use crate::error::{Error, Result};
 
 /// Parses `CREATE SCHEMA [IF NOT EXISTS] name`.
@@ -24,7 +24,12 @@ pub(crate) fn parse_create_schema(
     text: &str,
 ) -> Result<ParsedStatement> {
     if !cursor.eat_word("SCHEMA") {
-        return Err(Error::parse(source, index, "expected SCHEMA after CREATE", text));
+        return Err(Error::parse(
+            source,
+            index,
+            "expected SCHEMA after CREATE",
+            text,
+        ));
     }
     let if_not_exists = cursor.eat_words2("IF", "NOT") && cursor.eat_word("EXISTS");
     let Some(mut name) = cursor.parse_object_name() else {
@@ -67,14 +72,29 @@ pub(crate) fn parse_create_extension(
     text: &str,
 ) -> Result<ParsedStatement> {
     if !cursor.eat_word("EXTENSION") {
-        return Err(Error::parse(source, index, "expected EXTENSION after CREATE", text));
+        return Err(Error::parse(
+            source,
+            index,
+            "expected EXTENSION after CREATE",
+            text,
+        ));
     }
     let if_not_exists = cursor.eat_words2("IF", "NOT") && cursor.eat_word("EXISTS");
     let Some(mut name) = cursor.parse_object_name() else {
-        return Err(Error::parse(source, index, "expected an extension name", text));
+        return Err(Error::parse(
+            source,
+            index,
+            "expected an extension name",
+            text,
+        ));
     };
     if name.len() != 1 {
-        return Err(Error::invalid(source, index, "extension names are not qualified", text));
+        return Err(Error::invalid(
+            source,
+            index,
+            "extension names are not qualified",
+            text,
+        ));
     }
     truncate_parts(&mut name);
     let mut schema = None;
@@ -82,14 +102,24 @@ pub(crate) fn parse_create_extension(
     while !cursor.is_empty() {
         if cursor.eat_word("SCHEMA") {
             let Some(parts) = cursor.parse_object_name() else {
-                return Err(Error::parse(source, index, "expected a schema name after SCHEMA", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a schema name after SCHEMA",
+                    text,
+                ));
             };
             schema = Some(parts.join("."));
         } else if cursor.eat_word("VERSION") {
             // Accepted and ignored (version state is ALTER EXTENSION
             // UPDATE territory).
             if cursor.next().is_none() {
-                return Err(Error::parse(source, index, "expected a version after VERSION", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a version after VERSION",
+                    text,
+                ));
             }
         } else if cursor.eat_word("CASCADE") {
             // Accepted and ignored: CASCADE pulls in dependency
@@ -123,7 +153,12 @@ pub(crate) fn parse_drop_schema(
         return Err(Error::parse(source, index, "expected a schema name", text));
     };
     if name.len() != 1 {
-        return Err(Error::invalid(source, index, "schema names are not qualified", text));
+        return Err(Error::invalid(
+            source,
+            index,
+            "schema names are not qualified",
+            text,
+        ));
     }
     truncate_parts(&mut name);
     let cascade = if cursor.eat_word("CASCADE") {
@@ -141,10 +176,7 @@ pub(crate) fn parse_drop_schema(
             text,
         ));
     }
-    Ok(ParsedStatement::DropSchema {
-        name,
-        if_exists,
-    })
+    Ok(ParsedStatement::DropSchema { name, if_exists })
 }
 
 /// Parses `DROP EXTENSION [IF EXISTS] name [RESTRICT|CASCADE]`.
@@ -156,10 +188,20 @@ pub(crate) fn parse_drop_extension(
 ) -> Result<ParsedStatement> {
     let if_exists = cursor.eat_words2("IF", "EXISTS");
     let Some(mut name) = cursor.parse_object_name() else {
-        return Err(Error::parse(source, index, "expected an extension name", text));
+        return Err(Error::parse(
+            source,
+            index,
+            "expected an extension name",
+            text,
+        ));
     };
     if name.len() != 1 {
-        return Err(Error::invalid(source, index, "extension names are not qualified", text));
+        return Err(Error::invalid(
+            source,
+            index,
+            "extension names are not qualified",
+            text,
+        ));
     }
     truncate_parts(&mut name);
     let cascade = if cursor.eat_word("CASCADE") {
@@ -217,10 +259,7 @@ pub(crate) fn parse_drop_table(
             text,
         ));
     }
-    Ok(ParsedStatement::DropTable {
-        names,
-        if_exists,
-    })
+    Ok(ParsedStatement::DropTable { names, if_exists })
 }
 
 /// Handles statements sqlparser parses well and that either configure no

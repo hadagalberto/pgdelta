@@ -18,15 +18,17 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+// Shared harness; a property-test target uses only part of it.
+#[allow(dead_code)]
 mod common;
 
 use proptest::prelude::*;
-use proptest::strategy::BoxedStrategy;
+use proptest::strategy::{BoxedStrategy, ValueTree};
 
 use pgdelta_core::model::{
-    Catalog, Column, Constraint, ConstraintKind, Extension, FkAction, FkMatch, Generated,
-    Identity, IdentityKind, Index, IndexElem, IndexElemKind, PUBLIC_SCHEMA, SequenceOptions,
-    SortOrder, Table,
+    Catalog, Column, Constraint, ConstraintKind, Extension, FkAction, FkMatch, Generated, Identity,
+    IdentityKind, Index, IndexElem, IndexElemKind, PUBLIC_SCHEMA, SequenceOptions, SortOrder,
+    Table,
 };
 use pgdelta_core::{apply_sql_to, catalog_from_sql, plan};
 
@@ -36,24 +38,16 @@ fn any_catalog() -> impl Strategy<Value = Catalog> {
         proptest::collection::vec(extension_spec(), 0..2),
         proptest::collection::vec(table_spec(), 0..4),
     )
-    .prop_map(|(schemas, extensions, tables)| {
-        build_catalog(&schemas, &extensions, &tables)
-    })
+        .prop_map(|(schemas, extensions, tables)| build_catalog(&schemas, &extensions, &tables))
 }
 
 /// The schemas a generated catalog may use (plus the ambient `public`).
 fn schema_name() -> impl Strategy<Value = String> {
-    prop_oneof![
-        Just("sales".to_owned()),
-        Just("crm".to_owned()),
-    ]
+    prop_oneof![Just("sales".to_owned()), Just("crm".to_owned()),]
 }
 
 fn extension_spec() -> impl Strategy<Value = String> {
-    prop_oneof![
-        Just("pg_trgm".to_owned()),
-        Just("citext".to_owned()),
-    ]
+    prop_oneof![Just("pg_trgm".to_owned()), Just("citext".to_owned()),]
 }
 
 /// The closed set of generated column types (canonical spellings, the
@@ -148,37 +142,45 @@ fn column_spec() -> impl Strategy<Value = Column> {
         prop::bool::ANY,
         prop::option::of(Just("C".to_owned())),
     )
-    .prop_flat_map(|(name, data_type, not_null, want_default, collation)| {
-        let identity = identity_for(&data_type);
-        (
-            Just(name),
-            Just(data_type),
-            Just(not_null),
-            Just(want_default),
-            Just(collation),
-            identity,
-        )
-        .prop_map(|(name, data_type, not_null, want_default, collation, identity)| {
-            // Identity columns are implicitly NOT NULL (`CREATE TABLE`,
-            // `GENERATED ... AS IDENTITY`) and may not carry a default
-            // (PostgreSQL: "column ... cannot have a default value and an
-            // identity specification").
-            let (not_null, default) = if identity.is_some() {
-                (true, None)
-            } else {
-                (not_null, want_default.then(|| default_for(&data_type)).flatten())
-            };
-            Column {
-                name,
-                data_type,
-                not_null,
-                default: default.map(str::to_owned),
-                generated: None,
+        .prop_flat_map(|(name, data_type, not_null, want_default, collation)| {
+            let identity = identity_for(&data_type);
+            (
+                Just(name),
+                Just(data_type),
+                Just(not_null),
+                Just(want_default),
+                Just(collation),
                 identity,
-                collation: collation.filter(|_| is_collatable(&data_type)),
-            }
+            )
+                .prop_map(
+                    |(name, data_type, not_null, want_default, collation, identity)| {
+                        // Identity columns are implicitly NOT NULL (`CREATE TABLE`,
+                        // `GENERATED ... AS IDENTITY`) and may not carry a default
+                        // (PostgreSQL: "column ... cannot have a default value and an
+                        // identity specification").
+                        let (not_null, default) = if identity.is_some() {
+                            (true, None)
+                        } else {
+                            (
+                                not_null,
+                                want_default.then(|| default_for(&data_type)).flatten(),
+                            )
+                        };
+                        // Decide the collation before `data_type` is moved into the
+                        // struct literal (field initialisers are evaluated in order).
+                        let collation = collation.filter(|_| is_collatable(&data_type));
+                        Column {
+                            name,
+                            data_type,
+                            not_null,
+                            default: default.map(str::to_owned),
+                            generated: None,
+                            identity,
+                            collation,
+                        }
+                    },
+                )
         })
-    })
 }
 
 /// Constraint kinds; names are derived per table in `table_spec` (a
@@ -216,56 +218,56 @@ fn table_spec() -> impl Strategy<Value = Table> {
         proptest::collection::vec(column_spec(), 1..5),
         proptest::collection::vec(constraint_spec(), 0..2),
     )
-    .prop_map(|(schema, name, mut columns, mut constraints)| {
-        // Column names unique per table (a PostgreSQL hard rule).
-        columns.sort_by(|a, b| a.name.cmp(&b.name));
-        columns.dedup_by(|a, b| a.name == b.name);
-        // Keep only constraints whose columns exist; the `CHECK` on
-        // `"val" >= 0` additionally requires `val` to have a comparable
-        // type. (`constraint_spec` never generates foreign keys.)
-        constraints.retain(|c| match &c.kind {
-            ConstraintKind::PrimaryKey { columns: keys } | ConstraintKind::Unique {
-                columns: keys,
-                ..
-            } => keys.iter().all(|k| column_exists(&columns, k)),
-            ConstraintKind::Check { .. } => columns
+        .prop_map(|(schema, name, mut columns, mut constraints)| {
+            // Column names unique per table (a PostgreSQL hard rule).
+            columns.sort_by(|a, b| a.name.cmp(&b.name));
+            columns.dedup_by(|a, b| a.name == b.name);
+            // Keep only constraints whose columns exist; the `CHECK` on
+            // `"val" >= 0` additionally requires `val` to have a comparable
+            // type. (`constraint_spec` never generates foreign keys.)
+            constraints.retain(|c| match &c.kind {
+                ConstraintKind::PrimaryKey { columns: keys }
+                | ConstraintKind::Unique { columns: keys, .. } => {
+                    keys.iter().all(|k| column_exists(&columns, k))
+                }
+                ConstraintKind::Check { .. } => columns
+                    .iter()
+                    .any(|c| c.name == "val" && is_comparable(&c.data_type)),
+                ConstraintKind::ForeignKey { .. } => true,
+            });
+            // At most one primary key per table (PostgreSQL hard rule).
+            let pk_count = constraints
                 .iter()
-                .any(|c| c.name == "val" && is_comparable(&c.data_type)),
-            ConstraintKind::ForeignKey { .. } => true,
-        });
-        // At most one primary key per table (PostgreSQL hard rule).
-        let pk_count = constraints
-            .iter()
-            .filter(|c| matches!(c.kind, ConstraintKind::PrimaryKey { .. }))
-            .count();
-        if pk_count > 1 {
-            constraints.retain(|c| !matches!(c.kind, ConstraintKind::PrimaryKey { .. }));
-        }
-        for constraint in &mut constraints {
-            constraint.name = match &constraint.kind {
-                ConstraintKind::PrimaryKey { .. } => format!("{name}_pkey"),
-                ConstraintKind::Unique { .. } => format!("{name}_a_key"),
-                ConstraintKind::Check { .. } => format!("{name}_val_check"),
-                ConstraintKind::ForeignKey { .. } => format!("{name}_a_fkey"),
-            };
-        }
-        // PRIMARY KEY implies NOT NULL (mirrors the applier).
-        for constraint in &constraints {
-            if let ConstraintKind::PrimaryKey { columns: pk } = &constraint.kind {
-                for column in columns.iter_mut() {
-                    if pk.contains(&column.name) {
-                        column.not_null = true;
+                .filter(|c| matches!(c.kind, ConstraintKind::PrimaryKey { .. }))
+                .count();
+            if pk_count > 1 {
+                constraints.retain(|c| !matches!(c.kind, ConstraintKind::PrimaryKey { .. }));
+            }
+            for constraint in &mut constraints {
+                constraint.name = match &constraint.kind {
+                    ConstraintKind::PrimaryKey { .. } => format!("{name}_pkey"),
+                    ConstraintKind::Unique { .. } => format!("{name}_a_key"),
+                    ConstraintKind::Check { .. } => format!("{name}_val_check"),
+                    ConstraintKind::ForeignKey { .. } => format!("{name}_a_fkey"),
+                };
+            }
+            // PRIMARY KEY implies NOT NULL (mirrors the applier).
+            for constraint in &constraints {
+                if let ConstraintKind::PrimaryKey { columns: pk } = &constraint.kind {
+                    for column in &mut columns {
+                        if pk.contains(&column.name) {
+                            column.not_null = true;
+                        }
                     }
                 }
             }
-        }
-        Table {
-            schema,
-            name,
-            columns,
-            constraints,
-        }
-    })
+            Table {
+                schema,
+                name,
+                columns,
+                constraints,
+            }
+        })
 }
 
 fn column_exists(columns: &[Column], name: &str) -> bool {
@@ -395,9 +397,11 @@ fn build_catalog(schemas: &[String], extensions: &[String], tables: &[Table]) ->
 fn rand_bit(seed: &str) -> bool {
     let mut hash: u32 = 0;
     for (i, byte) in seed.bytes().enumerate() {
-        hash = hash.wrapping_mul(31).wrapping_add(u32::from(byte) + i as u32);
+        hash = hash
+            .wrapping_mul(31)
+            .wrapping_add(u32::from(byte) + i as u32);
     }
-    hash % 2 == 0
+    hash.is_multiple_of(2)
 }
 
 proptest! {
@@ -453,9 +457,10 @@ fn generated_column_round_trips() {
 /// single primary keys (checked on a fixed sample, deterministically).
 #[test]
 fn generator_tables_are_name_consistent() {
+    let strategy = any_catalog();
     let mut runner = proptest::test_runner::TestRunner::deterministic();
     for _ in 0..16 {
-        let catalog = runner.run(&any_catalog(), |_| Ok(())).unwrap();
+        let catalog = strategy.new_tree(&mut runner).unwrap().current();
         let mut relations: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         for ((schema, name), table) in &catalog.tables {
             assert!(

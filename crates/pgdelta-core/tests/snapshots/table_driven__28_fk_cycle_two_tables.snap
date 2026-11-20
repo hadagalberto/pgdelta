@@ -1,0 +1,30 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <28_fk_cycle_two_tables/from.sql>
+-- to:   <28_fk_cycle_two_tables/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE TABLE "public"."a" (
+    "id" bigint NOT NULL,
+    "b_id" bigint,
+    CONSTRAINT "a_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "public"."b" (
+    "id" bigint NOT NULL,
+    "a_id" bigint,
+    CONSTRAINT "b_pkey" PRIMARY KEY ("id")
+);
+
+ALTER TABLE "public"."a" ADD CONSTRAINT "a_b_id_fkey" FOREIGN KEY ("b_id") REFERENCES "public"."b" ("id");
+
+ALTER TABLE "public"."b" ADD CONSTRAINT "b_a_id_fkey" FOREIGN KEY ("a_id") REFERENCES "public"."a" ("id");
+
+COMMIT;

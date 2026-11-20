@@ -1,4 +1,4 @@
-﻿//! pgdelta: diff two PostgreSQL schemas and generate a safe, ordered
+//! pgdelta: diff two PostgreSQL schemas and generate a safe, ordered
 //! migration script.
 //!
 //! Milestone-1 scope: `diff` (SQL/JSON output) and `inspect` for the
@@ -86,19 +86,18 @@ struct InspectArgs {
 }
 
 fn run_diff(args: &DiffArgs) -> Result<ExitCode, anyhow::Error> {
-    let from_spec = SourceSpec::parse(&args.from)
-        .with_context(|| format!("parsing --from {:?}", args.from))?;
-    let to_spec = SourceSpec::parse(&args.to)
-        .with_context(|| format!("parsing --to {:?}", args.to))?;
+    let from_spec =
+        SourceSpec::parse(&args.from).with_context(|| format!("parsing --from {:?}", args.from))?;
+    let to_spec =
+        SourceSpec::parse(&args.to).with_context(|| format!("parsing --to {:?}", args.to))?;
 
     let from = load_catalog(&from_spec)
         .with_context(|| format!("loading --from ({})", from_spec.describe()))?;
-    let to = load_catalog(&to_spec)
-        .with_context(|| format!("loading --to ({})", to_spec.describe()))?;
+    let to =
+        load_catalog(&to_spec).with_context(|| format!("loading --to ({})", to_spec.describe()))?;
 
-    let planned =
-        plan(&from, &to, &from_spec.describe(), &to_spec.describe())
-            .context("planning the migration")?;
+    let planned = plan(&from, &to, &from_spec.describe(), &to_spec.describe())
+        .context("planning the migration")?;
 
     let summary = planned.summary();
     if summary.total == 0 {
@@ -121,19 +120,15 @@ fn run_diff(args: &DiffArgs) -> Result<ExitCode, anyhow::Error> {
 }
 
 fn write_output(args: &DiffArgs, bytes: &[u8]) -> Result<(), anyhow::Error> {
-    match &args.output {
-        Some(path) => {
-            std::fs::write(path, bytes)
-                .with_context(|| format!("writing {}", path.display()))?;
-        }
-        None => {
-            let stdout = std::io::stdout();
-            let mut handle = stdout.lock();
-            handle
-                .write_all(bytes)
-                .and_then(|_| handle.flush())
-                .context("writing the migration script to stdout")?;
-        }
+    if let Some(path) = &args.output {
+        std::fs::write(path, bytes).with_context(|| format!("writing {}", path.display()))?;
+    } else {
+        let stdout = std::io::stdout();
+        let mut handle = stdout.lock();
+        handle
+            .write_all(bytes)
+            .and_then(|()| handle.flush())
+            .context("writing the migration script to stdout")?;
     }
     Ok(())
 }
@@ -141,8 +136,8 @@ fn write_output(args: &DiffArgs, bytes: &[u8]) -> Result<(), anyhow::Error> {
 fn run_inspect(args: &InspectArgs) -> Result<ExitCode, anyhow::Error> {
     let spec = SourceSpec::parse(&args.source)
         .with_context(|| format!("parsing source {:?}", args.source))?;
-    let catalog = load_catalog(&spec)
-        .with_context(|| format!("loading source ({})", spec.describe()))?;
+    let catalog =
+        load_catalog(&spec).with_context(|| format!("loading source ({})", spec.describe()))?;
     let json = catalog.to_json();
     println!("{}", serde_json::to_string_pretty(&json)?);
     Ok(ExitCode::SUCCESS)

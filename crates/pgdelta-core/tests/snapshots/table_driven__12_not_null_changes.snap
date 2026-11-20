@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <12_not_null_changes/from.sql>
+-- to:   <12_not_null_changes/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TABLE "public"."users" ALTER COLUMN "email" DROP NOT NULL;
+
+ALTER TABLE "public"."users" ALTER COLUMN "id" SET NOT NULL;
+
+COMMIT;

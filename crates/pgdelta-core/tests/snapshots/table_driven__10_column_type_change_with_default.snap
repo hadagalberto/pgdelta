@@ -1,0 +1,20 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <10_column_type_change_with_default/from.sql>
+-- to:   <10_column_type_change_with_default/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TABLE "public"."notes" ALTER COLUMN "body" DROP DEFAULT;
+
+ALTER TABLE "public"."notes" ALTER COLUMN "body" SET DEFAULT 'x';
+
+ALTER TABLE "public"."notes" ALTER COLUMN "body" TYPE character varying(500);
+
+COMMIT;

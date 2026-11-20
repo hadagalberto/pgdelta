@@ -1,0 +1,21 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <37_long_name_truncation/from.sql>
+-- to:   <37_long_name_truncation/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE TABLE "public"."this_is_a_very_long_table_name_used_to_exercise_identifier_trun" (
+    "a" integer NOT NULL,
+    "another_extremely_long_column_name_here" text,
+    CONSTRAINT "this_is_a_very_long_table_name_used_to_exercise_identifier_pkey" PRIMARY KEY ("a"),
+    CONSTRAINT "this_is_a_very_long_table_nam_another_extremely_long_column_key" UNIQUE ("another_extremely_long_column_name_here")
+);
+
+COMMIT;

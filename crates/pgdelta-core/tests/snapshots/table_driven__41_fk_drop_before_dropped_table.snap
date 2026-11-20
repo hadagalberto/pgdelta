@@ -1,0 +1,20 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <41_fk_drop_before_dropped_table/from.sql>
+-- to:   <41_fk_drop_before_dropped_table/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TABLE "public"."orders" DROP CONSTRAINT "orders_user_id_fkey";
+
+ALTER TABLE "public"."orders" DROP COLUMN "user_id";
+
+DROP TABLE "public"."users";
+
+COMMIT;

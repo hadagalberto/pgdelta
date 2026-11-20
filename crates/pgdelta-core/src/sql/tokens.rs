@@ -40,8 +40,8 @@ pub(crate) fn split_statements(
     sql: &str,
 ) -> Result<Vec<StatementTokens>, sqlparser::tokenizer::TokenizerError> {
     let mut tokens = Vec::new();
-    for tok in sqlparser::tokenizer::Tokenizer::new(&PostgreSqlDialect {}, sql)
-        .tokenize_with_location()?
+    for tok in
+        sqlparser::tokenizer::Tokenizer::new(&PostgreSqlDialect {}, sql).tokenize_with_location()?
     {
         if !matches!(tok.token, Token::Whitespace(_)) {
             tokens.push(tok.token);
@@ -280,11 +280,9 @@ impl<'a> Cursor<'a> {
                 Some(Token::Word(w))
                     if depth == 0
                         && w.quote_style.is_none()
-                        && boundaries
-                            .iter()
-                            .any(|b| w.value.eq_ignore_ascii_case(b)) =>
+                        && boundaries.iter().any(|b| w.value.eq_ignore_ascii_case(b)) =>
                 {
-                    break
+                    break;
                 }
                 Some(Token::Comma) if depth == 0 => break,
                 _ => self.pos += 1,

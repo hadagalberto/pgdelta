@@ -1,0 +1,155 @@
+# SQL parser decision and normalisation rules (milestone 1)
+
+## Decision: `sqlparser-rs`, not `pg_query`
+
+The SPEC asks for `pg_query` (libpg_query bindings) to be tried first and, if
+it cannot be built on Windows MSVC, a fallback to `sqlparser-rs` with the
+PostgreSQL dialect, documented. That is what this repository does.
+
+### The `pg_query` attempt (evidence)
+
+The probe lived in `tmp-probe/` (a throwaway crate, deliberately **not** part
+of the workspace and not committed). It declared `pg_query = "6.1.0"` and
+called `pg_query::parse("CREATE TABLE t (id bigint PRIMARY KEY);")`.
+
+On this development host (`x86_64-pc-windows-msvc`, Rust 1.100.0) the build
+fails in `pg_query`'s build script before any pgdelta code is compiled:
+
+```
+thread 'main' panicked at .../bindgen-0.66.1/lib.rs:604:31:
+Unable to find libclang: "couldn't find any valid shared libraries matching:
+['clang.dll', 'libclang.dll'], set the `LIBCLANG_PATH` environment variable
+to a path where one of these files can be found (invalid: [])"
+  cargo:rustc-link-lib=static=pg_query
+```
+
+`pg_query` generates Rust bindings over libpg_query's C headers with
+`bindgen`, which requires a `libclang` shared library. The MSVC toolchain
+installed here does not provide one. Requiring developers and CI to install
+LLVM just to parse SQL would break the "single static binary, builds
+everywhere" goal, so the fallback was taken.
+
+### Fallback: `sqlparser-rs` (PostgreSQL dialect)
+
+`pgdelta-core` depends on `sqlparser = "0.59"`. The crate's PostgreSQL
+dialect tokenises and parses DDL; pgdelta adds a thin, explicit layer on top:
+
+* `sql/tokens.rs` — statement splitting that is comment-, string- and
+  dollar-quote-aware (PostgreSQL docs §4.1.5, "Comments": `--` and nestable
+  `/* ... */`; §4.1.2.4, "Dollar-Quoted String Constants"), with UTF-8 BOM
+  stripping;
+* `sql/datatype.rs`, `sql/expr.rs` — canonical type and expression rendering;
+* `sql/create_table.rs`, `sql/alter_table.rs`, `sql/index.rs`, `sql/misc.rs`
+  — statement parsers that map the production to the normalised model;
+* `apply.rs` — enforces PostgreSQL's semantic rules (no stubs: unknown or
+  unsupported forms are rejected with a source-quoted error, never silently
+  dropped).
+
+Every normalisation rule below was checked against the official PostgreSQL
+18 documentation; nothing was guessed.
+
+## Official sources consulted
+
+All fetched from `postgresql.org` during milestone 1 (PostgreSQL 18 stable
+docs, the oldest supported server is 13; the rules cited here are stable
+across 13–18 unless marked otherwise):
+
+* §4.1.1 "Identifiers and Key Words" —
+  <https://www.postgresql.org/docs/18/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS>
+* `CREATE TABLE` —
+  <https://www.postgresql.org/docs/18/sql-createtable.html>
+* `CREATE SEQUENCE` —
+  <https://www.postgresql.org/docs/18/sql-createsequence.html>
+* `CREATE INDEX` (including "Building Indexes Concurrently") —
+  <https://www.postgresql.org/docs/18/sql-createindex.html>
+* `ALTER TABLE` —
+  <https://www.postgresql.org/docs/18/sql-altertable.html>
+
+PostgreSQL C sources for the auto-generated-name algorithms are cited inline
+in `crates/pgdelta-core/src/naming.rs` with `REL_18_STABLE` GitHub URLs.
+
+## Normalisation rules implemented
+
+### Identifiers
+
+* Unquoted identifiers fold to lower case; quoted identifiers keep their
+  case exactly (§4.1.1: "Quoting an identifier also makes it case-sensitive,
+  whereas unquoted names are always folded to lower case").
+* Identifiers are truncated to 63 bytes on a UTF-8 character boundary
+  (§4.1.1: "The system uses no more than NAMEDATALEN-1 bytes of an
+  identifier ... By default, NAMEDATALEN is 64").
+* Unqualified relation names resolve to `public`, matching a fresh
+  database's default `search_path`.
+* Output always quotes identifiers, as `pg_dump` does: always valid, and
+  immune to keyword collisions.
+
+### Columns
+
+* `COLLATE` requires a collatable type; omitted collation is `None` in the
+  model, meaning "the type's default collation" (`CREATE TABLE`, `COLLATE`).
+* `DEFAULT` expressions must be variable-free (`CREATE TABLE`, `DEFAULT`:
+  "any variable-free expression ... cross-references to other columns in the
+  current table are not allowed").
+* Stored generated columns are modelled. The generation expression may refer
+  to other base columns, never to itself or to another generated column
+  (`CREATE TABLE`, `GENERATED ALWAYS AS`). PostgreSQL 18 added `VIRTUAL`
+  generated columns and made it the default; because generated SQL targets
+  13–18, sources must spell `STORED` explicitly (13–17 require it anyway).
+* Identity columns are restricted to integer types, are implicitly `NOT
+  NULL`, and cannot carry a `DEFAULT` (`CREATE TABLE`, `GENERATED ... AS
+  IDENTITY`). Sequence options are normalised with the `CREATE SEQUENCE`
+  defaults: ascending `MINVALUE` 1, `MAXVALUE` = type maximum, `START` =
+  minvalue, `CACHE` 1, `NO CYCLE`.
+
+### Constraints and indexes
+
+* `PRIMARY KEY` implies `NOT NULL`; at most one primary key per table
+  (`CREATE TABLE`, `PRIMARY KEY`).
+* A `REFERENCES` clause without a column list resolves to the referenced
+  table's primary key; an explicit list must match a non-deferrable unique
+  or primary-key constraint, or a non-partial unique index (`CREATE TABLE`,
+  `REFERENCES`).
+* `NULLS NOT DISTINCT` on `UNIQUE` constraints and unique indexes is
+  PostgreSQL 15+; cases using it carry a `min_pg_version.txt` gate so the
+  live-database suite skips them on 13/14 instead of weakening an assertion.
+* `NOT VALID` is accepted only for `CHECK` and foreign-key constraints
+  (`ALTER TABLE`, `ADD ... NOT VALID`).
+* Indexes model method, key elements (column/expression, collation, opclass
+  and parameters, sort/nulls order), `INCLUDE`, `WITH`, `TABLESPACE` and
+  partial predicates (`CREATE INDEX`). An index backing a `PRIMARY KEY` or
+  `UNIQUE` constraint is *not* a separate model entry — it shares the
+  constraint's name and lifetime.
+* `CREATE INDEX CONCURRENTLY` cannot run inside a transaction block
+  (`CREATE INDEX`, "Building Indexes Concurrently"), so those statements are
+  emitted in a separate, clearly marked non-transactional section.
+
+### Ordering and apply semantics
+
+* Drops: constraints → columns → tables → extensions → schemas; a dropped
+  table's indexes and constraints die with it.
+* Creates: schemas → extensions → tables (non-FK constraints inline) →
+  column/constraint alterations → foreign keys (after every referenced
+  object exists) → indexes.
+* `DROP COLUMN` automatically drops indexes and table constraints involving
+  the column (`ALTER TABLE`, `DROP COLUMN`); outside dependents (e.g. FKs
+  from other tables) are rejected rather than silently cascaded.
+* `SET DATA TYPE ... COLLATE` replaces the collation outright; if omitted,
+  the collation is the new type's default (`ALTER TABLE`, `SET DATA TYPE`).
+  A type change with a default uses the `pg_dump` pattern: `DROP DEFAULT`,
+  `SET DATA TYPE`, `SET DEFAULT` (`ALTER TABLE`, Notes).
+* `NOT VALID` → valid is planned as `VALIDATE CONSTRAINT` rather than a
+  drop/recreate (`ALTER TABLE`, `VALIDATE CONSTRAINT`).
+
+## Deliberate milestone-1 limits
+
+These are absent from the model and **rejected with a source-located error**
+when encountered, rather than silently ignored: partitioned tables,
+views/materialized views, functions/procedures, triggers, policies/RLS,
+grants, comments, publication membership, exclusion constraints, enum/
+composite/domain/range types, standalone sequences, column storage settings
+and generated-column expression rewriting on rename. Extension `VERSION` and
+`CASCADE` clauses parse but are not modelled (version state is managed with
+`ALTER EXTENSION UPDATE`, outside milestone 1).
+
+Renames are never guessed: a rename diffs as a drop plus a create until the
+opt-in `--rename` hints from the SPEC are implemented in a later milestone.

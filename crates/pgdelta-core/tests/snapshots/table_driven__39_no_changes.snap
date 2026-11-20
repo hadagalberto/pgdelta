@@ -1,0 +1,5 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+

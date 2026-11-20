@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <40_quoted_identifiers/from.sql>
+-- to:   <40_quoted_identifiers/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TABLE "public"."Users" ADD COLUMN "CreatedAt" timestamp with time zone DEFAULT "now"();
+
+COMMIT;

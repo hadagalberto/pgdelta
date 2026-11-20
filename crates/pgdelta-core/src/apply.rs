@@ -14,8 +14,8 @@ use crate::model::{
 };
 use crate::naming;
 use crate::sql::{
-    ParsedStatement, RawColumn, RawConstraint, RawConstraintKind, RawForeignKey, RawIndex, RawTable,
-    alter_table::AlterAction, alter_table::SeqOption, normalize_sequence_options,
+    ParsedStatement, RawColumn, RawConstraint, RawConstraintKind, RawForeignKey, RawIndex,
+    RawTable, alter_table::AlterAction, alter_table::SeqOption, normalize_sequence_options,
 };
 
 /// Applies a slice of parsed statements (with 1-based statement indices
@@ -62,7 +62,10 @@ fn occupied_relation_names(catalog: &Catalog, schema: &str) -> Vec<String> {
     let mut names = catalog.relation_names(schema);
     for table in catalog.tables.values().filter(|t| t.schema == schema) {
         for c in &table.constraints {
-            if matches!(c.kind, ConstraintKind::PrimaryKey { .. } | ConstraintKind::Unique { .. }) {
+            if matches!(
+                c.kind,
+                ConstraintKind::PrimaryKey { .. } | ConstraintKind::Unique { .. }
+            ) {
                 names.push(c.name.clone());
             }
         }
@@ -103,12 +106,21 @@ fn apply_statement(
             name,
             if_not_exists,
         } => apply_create_schema(catalog, source, index, &name[0], *if_not_exists),
-        ParsedStatement::DropSchema { name, if_exists } => apply_drop_schema(catalog, source, index, &name[0], *if_exists),
+        ParsedStatement::DropSchema { name, if_exists } => {
+            apply_drop_schema(catalog, source, index, &name[0], *if_exists)
+        }
         ParsedStatement::CreateExtension {
             name,
             if_not_exists,
             schema,
-        } => apply_create_extension(catalog, source, index, name, *if_not_exists, schema.as_deref()),
+        } => apply_create_extension(
+            catalog,
+            source,
+            index,
+            name,
+            *if_not_exists,
+            schema.as_deref(),
+        ),
         ParsedStatement::DropExtension { name, if_exists } => {
             apply_drop_extension(catalog, source, index, name, *if_exists)
         }
@@ -340,7 +352,14 @@ fn resolve_fk(
     target: Option<&Table>,
     unique_indexes: &[&Index],
     text: &str,
-) -> Result<(String, String, Vec<String>, crate::model::FkAction, crate::model::FkAction, crate::model::FkMatch)> {
+) -> Result<(
+    String,
+    String,
+    Vec<String>,
+    crate::model::FkAction,
+    crate::model::FkAction,
+    crate::model::FkMatch,
+)> {
     let Some(target) = target else {
         return Err(Error::invalid(
             source,
@@ -373,10 +392,9 @@ fn resolve_fk(
                     text,
                 ));
             }
-        } else if !unique_indexes
-            .iter()
-            .any(|idx| idx.unique && idx.predicate.is_none() && index_key_set(idx) == explicit.as_slice())
-        {
+        } else if !unique_indexes.iter().any(|idx| {
+            idx.unique && idx.predicate.is_none() && index_key_set(idx) == explicit.as_slice()
+        }) {
             return Err(Error::invalid(
                 source,
                 index,
@@ -384,8 +402,7 @@ fn resolve_fk(
                     "referenced columns {:?} on table {:?} must match a non-deferrable \
                      unique or primary key constraint (PostgreSQL docs, CREATE TABLE, \
                      REFERENCES)",
-                    explicit,
-                    target.name
+                    explicit, target.name
                 ),
                 text,
             ));
@@ -447,7 +464,9 @@ fn build_constraints(
     let mut constraints: Vec<Constraint> = Vec::new();
     let mut others: Vec<String> = Vec::new();
     for raw in raws {
-        let name = if let Some(name) = &raw.name { crate::naming::truncate_ident(name) } else {
+        let name = if let Some(name) = &raw.name {
+            crate::naming::truncate_ident(name)
+        } else {
             let auto = auto_name(catalog, schema, table_name, raw, &others);
             others.push(auto.clone());
             auto
@@ -463,12 +482,10 @@ fn build_constraints(
                 columns: columns.iter().map(|c| trunc(c)).collect(),
                 nulls_distinct: *nulls_distinct,
             },
-            RawConstraintKind::Check { expr } => ConstraintKind::Check {
-                expr: expr.clone(),
-            },
+            RawConstraintKind::Check { expr } => ConstraintKind::Check { expr: expr.clone() },
             RawConstraintKind::ForeignKey(fk) => {
-                let self_reference =
-                    in_progress.is_some_and(|t| t.schema == fk.ref_schema && t.name == fk.ref_table);
+                let self_reference = in_progress
+                    .is_some_and(|t| t.schema == fk.ref_schema && t.name == fk.ref_table);
                 let target = if self_reference {
                     in_progress
                 } else {
@@ -645,7 +662,7 @@ fn validate_generated_expr(
                          exist on the table"
                     ),
                     text,
-                ))
+                ));
             }
             Some(referenced) if referenced.generated.is_some() => {
                 return Err(Error::invalid(
@@ -656,7 +673,7 @@ fn validate_generated_expr(
                          {ident:?} (PostgreSQL docs, CREATE TABLE, GENERATED ALWAYS AS)"
                     ),
                     text,
-                ))
+                ));
             }
             Some(_) => {}
         }
@@ -694,7 +711,12 @@ fn expr_identifiers(
     text: &str,
 ) -> Result<Vec<String>> {
     let parsed = crate::sql::expr::parse_expr_text(normalised).map_err(|e| {
-        Error::invalid(source, index, format!("expression {normalised:?} is not parsable: {e}"), text)
+        Error::invalid(
+            source,
+            index,
+            format!("expression {normalised:?} is not parsable: {e}"),
+            text,
+        )
     })?;
     Ok(collect_idents(&parsed))
 }
@@ -716,8 +738,13 @@ fn collect_idents(expr: &sqlparser::ast::Expr) -> Vec<String> {
         }
         Expr::Nested(inner) => out.extend(collect_idents(inner)),
         Expr::Cast { expr, .. } => out.extend(collect_idents(expr)),
-        Expr::Function(f) => match &f.args {
-            FunctionArguments::List(list) => {
+        // Literals (numbers, strings, booleans, NULL) are variable-free and
+        // contribute no column references. Treating them as "unsupported"
+        // wrongly rejected every normalised DEFAULT/GENERATED/CHECK
+        // expression containing a literal.
+        Expr::Value(_) => {}
+        Expr::Function(f) => {
+            if let FunctionArguments::List(list) = &f.args {
                 for arg in &list.args {
                     if let sqlparser::ast::FunctionArg::Unnamed(
                         sqlparser::ast::FunctionArgExpr::Expr(e),
@@ -727,10 +754,11 @@ fn collect_idents(expr: &sqlparser::ast::Expr) -> Vec<String> {
                     }
                 }
             }
-            _ => {}
-        },
+        }
         Expr::IsNull(inner) | Expr::IsNotNull(inner) => out.extend(collect_idents(inner)),
-        Expr::Between { expr, low, high, .. } => {
+        Expr::Between {
+            expr, low, high, ..
+        } => {
             out.extend(collect_idents(expr));
             out.extend(collect_idents(low));
             out.extend(collect_idents(high));
@@ -798,14 +826,7 @@ fn validate_table_expressions(
             validate_default_expr(source, index, default, text)?;
         }
         if let Some(generated) = &column.generated {
-            validate_generated_expr(
-                source,
-                index,
-                &generated.expr,
-                &column.name,
-                columns,
-                text,
-            )?;
+            validate_generated_expr(source, index, &generated.expr, &column.name, columns, text)?;
         }
     }
     for constraint in constraints {
@@ -915,9 +936,11 @@ fn apply_drop_table(
             .values()
             .filter(|t| {
                 t.constraints.iter().any(|c| match &c.kind {
-                    ConstraintKind::ForeignKey { ref_schema, ref_table, .. } => {
-                        ref_schema == &schema && ref_table == &name
-                    }
+                    ConstraintKind::ForeignKey {
+                        ref_schema,
+                        ref_table,
+                        ..
+                    } => ref_schema == &schema && ref_table == &name,
                     _ => false,
                 })
             })
@@ -980,7 +1003,15 @@ fn apply_alter_action(
         AlterAction::AddColumn {
             if_not_exists,
             column: raw,
-        } => apply_add_column(catalog, source, index, schema, table_name, raw, *if_not_exists),
+        } => apply_add_column(
+            catalog,
+            source,
+            index,
+            schema,
+            table_name,
+            raw,
+            *if_not_exists,
+        ),
         AlterAction::DropColumn { name, if_exists } => {
             apply_drop_column(catalog, source, index, schema, table_name, name, *if_exists)
         }
@@ -1042,7 +1073,13 @@ fn apply_alter_action(
             let data_type = col.data_type.clone();
             col.identity = Some(Identity {
                 kind: *kind,
-                options: normalize_sequence_options(source, index, &data_type, options, "ALTER TABLE")?,
+                options: normalize_sequence_options(
+                    source,
+                    index,
+                    &data_type,
+                    options,
+                    "ALTER TABLE",
+                )?,
             });
             // Identity columns are implicitly NOT NULL.
             col.not_null = true;
@@ -1129,7 +1166,14 @@ fn apply_alter_action(
             constraint: raw,
             not_valid,
         } => apply_add_constraint(
-            catalog, source, index, schema, table_name, name.clone(), raw, *not_valid,
+            catalog,
+            source,
+            index,
+            schema,
+            table_name,
+            name.clone(),
+            raw,
+            *not_valid,
         ),
         AlterAction::DropConstraint { name, if_exists } => {
             let table = table_mut(catalog, schema, table_name, source, index)?;
@@ -1147,11 +1191,7 @@ fn apply_alter_action(
         }
         AlterAction::ValidateConstraint { name } => {
             let table = table_mut(catalog, schema, table_name, source, index)?;
-            let Some(constraint) = table
-                .constraints
-                .iter_mut()
-                .find(|c| c.name == *name)
-            else {
+            let Some(constraint) = table.constraints.iter_mut().find(|c| c.name == *name) else {
                 return Err(Error::invalid(
                     source,
                     index,
@@ -1174,11 +1214,7 @@ fn apply_alter_action(
         }
         AlterAction::AlterConstraintDeferrable { name, deferrable } => {
             let table = table_mut(catalog, schema, table_name, source, index)?;
-            let Some(constraint) = table
-                .constraints
-                .iter_mut()
-                .find(|c| c.name == *name)
-            else {
+            let Some(constraint) = table.constraints.iter_mut().find(|c| c.name == *name) else {
                 return Err(Error::invalid(
                     source,
                     index,
@@ -1215,11 +1251,7 @@ fn apply_alter_action(
                     "ALTER TABLE",
                 ));
             }
-            let Some(constraint) = table
-                .constraints
-                .iter_mut()
-                .find(|c| c.name == *from)
-            else {
+            let Some(constraint) = table.constraints.iter_mut().find(|c| c.name == *from) else {
                 return Err(Error::invalid(
                     source,
                     index,
@@ -1252,9 +1284,7 @@ fn apply_alter_action(
             {
                 idx.table.clone_from(&new_name);
             }
-            catalog
-                .tables
-                .insert((schema.to_owned(), new_name), table);
+            catalog.tables.insert((schema.to_owned(), new_name), table);
             Ok(())
         }
     }
@@ -1280,7 +1310,10 @@ fn apply_add_column(
         return Err(Error::invalid(
             source,
             index,
-            format!("column {:?} of relation {table_name:?} already exists", raw.name),
+            format!(
+                "column {:?} of relation {table_name:?} already exists",
+                raw.name
+            ),
             "ALTER TABLE",
         ));
     }
@@ -1315,9 +1348,10 @@ fn apply_add_column(
     // PRIMARY KEY).
     for constraint in &constraints {
         if let ConstraintKind::PrimaryKey { columns } = &constraint.kind
-            && columns.contains(&column.name) {
-                column.not_null = true;
-            }
+            && columns.contains(&column.name)
+        {
+            column.not_null = true;
+        }
     }
 
     let table = table_mut(catalog, schema, table_name, source, index)?;
@@ -1394,7 +1428,11 @@ fn apply_add_constraint(
     .ok_or_else(|| Error::internal("ADD CONSTRAINT produced no constraint".to_owned()))?;
     if let Some(name) = name {
         constraint.name = trunc(&name);
-        if existing.constraints.iter().any(|c| c.name == constraint.name) {
+        if existing
+            .constraints
+            .iter()
+            .any(|c| c.name == constraint.name)
+        {
             return Err(Error::invalid(
                 source,
                 index,
@@ -1415,7 +1453,7 @@ fn apply_add_constraint(
                     index,
                     "NOT VALID is only allowed for CHECK and foreign-key constraints",
                     "ALTER TABLE",
-                ))
+                ));
             }
         }
     }
@@ -1476,35 +1514,37 @@ fn apply_rename_column(
 
     for column in &table.columns {
         if let Some(generated) = &column.generated
-            && expr_references(&generated.expr, from.as_str()) {
-                return Err(Error::unsupported(
-                    source,
-                    index,
-                    format!(
-                        "renaming column {from:?} would require rewriting the generation \
+            && expr_references(&generated.expr, from.as_str())
+        {
+            return Err(Error::unsupported(
+                source,
+                index,
+                format!(
+                    "renaming column {from:?} would require rewriting the generation \
                          expression of column {:?}; expression rewriting is not modelled in \
                          milestone 1 (see docs/parser.md)",
-                        column.name
-                    ),
-                    "ALTER TABLE",
-                ));
-            }
+                    column.name
+                ),
+                "ALTER TABLE",
+            ));
+        }
     }
     for constraint in &table.constraints {
         if let ConstraintKind::Check { expr } = &constraint.kind
-            && expr_references(expr, from) {
-                return Err(Error::unsupported(
-                    source,
-                    index,
-                    format!(
-                        "renaming column {from:?} would require rewriting constraint \
+            && expr_references(expr, from)
+        {
+            return Err(Error::unsupported(
+                source,
+                index,
+                format!(
+                    "renaming column {from:?} would require rewriting constraint \
                          {:?}'s expression; expression rewriting is not modelled in milestone 1 \
                          (see docs/parser.md)",
-                        constraint.name
-                    ),
-                    "ALTER TABLE",
-                ));
-            }
+                    constraint.name
+                ),
+                "ALTER TABLE",
+            ));
+        }
     }
     let indexes: Vec<Index> = catalog
         .indexes
@@ -1515,34 +1555,36 @@ fn apply_rename_column(
     for idx in &indexes {
         for elem in &idx.columns {
             if let IndexElemKind::Expression(expr) = &elem.kind
-                && expr_references(expr, from) {
-                    return Err(Error::unsupported(
-                        source,
-                        index,
-                        format!(
-                            "renaming column {from:?} would require rewriting the \
-                             expression of index {:?}; expression rewriting is not modelled \
-                             in milestone 1 (see docs/parser.md)",
-                            idx.name
-                        ),
-                        "ALTER TABLE",
-                    ));
-                }
-        }
-        if let Some(pred) = &idx.predicate
-            && expr_references(pred, from) {
+                && expr_references(expr, from)
+            {
                 return Err(Error::unsupported(
                     source,
                     index,
                     format!(
-                        "renaming column {from:?} would require rewriting the predicate of \
-                         index {:?}; expression rewriting is not modelled in milestone 1 \
-                         (see docs/parser.md)",
+                        "renaming column {from:?} would require rewriting the \
+                             expression of index {:?}; expression rewriting is not modelled \
+                             in milestone 1 (see docs/parser.md)",
                         idx.name
                     ),
                     "ALTER TABLE",
                 ));
             }
+        }
+        if let Some(pred) = &idx.predicate
+            && expr_references(pred, from)
+        {
+            return Err(Error::unsupported(
+                source,
+                index,
+                format!(
+                    "renaming column {from:?} would require rewriting the predicate of \
+                         index {:?}; expression rewriting is not modelled in milestone 1 \
+                         (see docs/parser.md)",
+                    idx.name
+                ),
+                "ALTER TABLE",
+            ));
+        }
     }
 
     // Plain references follow the rename (PostgreSQL stores attnums, so
@@ -1569,9 +1611,10 @@ fn apply_rename_column(
     {
         for elem in &mut idx.columns {
             if let IndexElemKind::Column(c) = &mut elem.kind
-                && c == from {
-                    c.clone_from(to);
-                }
+                && c == from
+            {
+                c.clone_from(to);
+            }
         }
         for inc in &mut idx.include {
             if inc == from {
@@ -1585,14 +1628,19 @@ fn apply_rename_column(
         .filter(|t| t.schema == schema && t.name != table_name)
     {
         for constraint in &mut other.constraints {
-            if let ConstraintKind::ForeignKey { ref_table, ref_columns, .. } = &mut constraint.kind
-                && ref_table == table_name {
-                    for rc in ref_columns.iter_mut() {
-                        if rc == from {
-                            rc.clone_from(to);
-                        }
+            if let ConstraintKind::ForeignKey {
+                ref_table,
+                ref_columns,
+                ..
+            } = &mut constraint.kind
+                && ref_table == table_name
+            {
+                for rc in ref_columns.iter_mut() {
+                    if rc == from {
+                        rc.clone_from(to);
                     }
                 }
+            }
         }
     }
     Ok(())
@@ -1623,15 +1671,17 @@ fn expr_mentions_ident(expr: &sqlparser::ast::Expr, name: &str) -> bool {
         Expr::Cast { expr, .. } => expr_mentions_ident(expr, name),
         Expr::Function(f) => match &f.args {
             FunctionArguments::List(list) => list.args.iter().any(|arg| match arg {
-                sqlparser::ast::FunctionArg::Unnamed(
-                    sqlparser::ast::FunctionArgExpr::Expr(e),
-                ) => expr_mentions_ident(e, name),
+                sqlparser::ast::FunctionArg::Unnamed(sqlparser::ast::FunctionArgExpr::Expr(e)) => {
+                    expr_mentions_ident(e, name)
+                }
                 _ => false,
             }),
             _ => false,
         },
         Expr::IsNull(inner) | Expr::IsNotNull(inner) => expr_mentions_ident(inner, name),
-        Expr::Between { expr, low, high, .. } => {
+        Expr::Between {
+            expr, low, high, ..
+        } => {
             expr_mentions_ident(expr, name)
                 || expr_mentions_ident(low, name)
                 || expr_mentions_ident(high, name)
@@ -1645,10 +1695,12 @@ fn expr_mentions_ident(expr: &sqlparser::ast::Expr, name: &str) -> bool {
             else_result,
             ..
         } => {
-            operand.as_ref().is_some_and(|e| expr_mentions_ident(e, name))
-                || conditions
-                    .iter()
-                    .any(|w| expr_mentions_ident(&w.condition, name) || expr_mentions_ident(&w.result, name))
+            operand
+                .as_ref()
+                .is_some_and(|e| expr_mentions_ident(e, name))
+                || conditions.iter().any(|w| {
+                    expr_mentions_ident(&w.condition, name) || expr_mentions_ident(&w.result, name)
+                })
                 || else_result
                     .as_ref()
                     .is_some_and(|e| expr_mentions_ident(e, name))
@@ -1684,14 +1736,15 @@ fn apply_create_index(
 
     for elem in &raw.columns {
         if let IndexElemKind::Column(c) = &elem.kind
-            && !column_names.contains(c) {
-                return Err(Error::invalid(
-                    source,
-                    index,
-                    format!("column {c:?} does not exist"),
-                    "CREATE INDEX",
-                ));
-            }
+            && !column_names.contains(c)
+        {
+            return Err(Error::invalid(
+                source,
+                index,
+                format!("column {c:?} does not exist"),
+                "CREATE INDEX",
+            ));
+        }
     }
     for inc in &raw.include {
         if !column_names.contains(inc) {
@@ -1705,9 +1758,14 @@ fn apply_create_index(
     }
 
     let (name, schema) = if let Some(parts) = &raw.name {
-        let (s, n) = resolve_name(parts);
-        // "the index is always created in the same schema as its
-        // parent table" (PostgreSQL docs, CREATE INDEX, `name`).
+        let (mut s, n) = resolve_name(parts);
+        // "No schema name can be included here; the index is always
+        // created in the same schema as its parent table" (PostgreSQL
+        // docs, CREATE INDEX, `name`). An unqualified index name therefore
+        // resolves to the table's schema, not to `search_path`/`public`.
+        if parts.len() == 1 {
+            s.clone_from(&table_schema);
+        }
         if parts.len() == 2 && s != table_schema {
             return Err(Error::invalid(
                 source,
@@ -1813,7 +1871,12 @@ fn apply_drop_index(
                 "DROP INDEX",
             ));
         }
-        if catalog.indexes.remove(&(schema.clone(), name.clone())).is_none() && !if_exists {
+        if catalog
+            .indexes
+            .remove(&(schema.clone(), name.clone()))
+            .is_none()
+            && !if_exists
+        {
             return Err(Error::invalid(
                 source,
                 index,

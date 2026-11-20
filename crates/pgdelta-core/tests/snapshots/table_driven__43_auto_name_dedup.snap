@@ -1,0 +1,21 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <43_auto_name_dedup/from.sql>
+-- to:   <43_auto_name_dedup/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE TABLE "public"."t" (
+    "a" integer,
+    CONSTRAINT "t_a_check" CHECK ("a" > 0),
+    CONSTRAINT "t_a_check1" CHECK ("a" < 100),
+    CONSTRAINT "t_a_check2" CHECK ("a" <> 50)
+);
+
+COMMIT;

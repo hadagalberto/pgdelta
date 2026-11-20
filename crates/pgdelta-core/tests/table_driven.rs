@@ -5,6 +5,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+// Shared harness; each test target uses a different subset of its helpers.
+#[allow(dead_code)]
 mod common;
 
 use insta::assert_snapshot;

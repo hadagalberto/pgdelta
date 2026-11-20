@@ -1,0 +1,22 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <44_unqualified_names_default_to_public/from.sql>
+-- to:   <44_unqualified_names_default_to_public/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE TABLE "public"."ledger" (
+    "id" bigint
+);
+
+CREATE TABLE "public"."ledger2" (
+    "id" bigint
+);
+
+COMMIT;

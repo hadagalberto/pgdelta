@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <31_index_drop/from.sql>
+-- to:   <31_index_drop/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+DROP INDEX "public"."idx_events_id";
+
+DROP INDEX "public"."idx_events_kind";
+
+COMMIT;

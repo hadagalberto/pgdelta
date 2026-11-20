@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <11_default_change/from.sql>
+-- to:   <11_default_change/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TABLE "public"."notes" ALTER COLUMN "body" SET DEFAULT 'y';
+
+ALTER TABLE "public"."notes" ALTER COLUMN "flag" SET DEFAULT false;
+
+COMMIT;

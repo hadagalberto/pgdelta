@@ -18,7 +18,9 @@
 //! sequence object, which is modelled in a later milestone — identity
 //! columns are the portable replacement.
 
-use sqlparser::ast::{ArrayElemTypeDef, DataType, ExactNumberInfo, ObjectName, ObjectNamePart, TimezoneInfo};
+use sqlparser::ast::{
+    ArrayElemTypeDef, DataType, ExactNumberInfo, ObjectName, ObjectNamePart, TimezoneInfo,
+};
 use sqlparser::dialect::PostgreSqlDialect;
 use sqlparser::parser::Parser;
 
@@ -27,8 +29,9 @@ use crate::error::{Error, Result};
 /// Re-parses raw type text through sqlparser's `CREATE TABLE` lift.
 pub(crate) fn parse_type_text(text: &str) -> Result<DataType> {
     let sql = format!("CREATE TABLE __pgdelta_lift__ (__c__ {text})");
-    let statements = Parser::parse_sql(&PostgreSqlDialect {}, &sql)
-        .map_err(|e| Error::Serialization(format!("internal type lift failed for {text:?}: {e}")))?;
+    let statements = Parser::parse_sql(&PostgreSqlDialect {}, &sql).map_err(|e| {
+        Error::Serialization(format!("internal type lift failed for {text:?}: {e}"))
+    })?;
     match statements.into_iter().next() {
         Some(sqlparser::ast::Statement::CreateTable(create)) => create
             .columns
@@ -75,7 +78,7 @@ pub(crate) fn canonical_type(data_type: &DataType) -> Result<String> {
                 return Err(Error::Serialization(
                     "bare FLOAT is deprecated and ambiguous; use real or double precision"
                         .to_owned(),
-                ))
+                ));
             }
         },
         DataType::Double(_) | DataType::DoublePrecision => "double precision".to_owned(),
@@ -85,14 +88,12 @@ pub(crate) fn canonical_type(data_type: &DataType) -> Result<String> {
         DataType::String(_) => {
             return Err(Error::Serialization(
                 "the STRING type is not a PostgreSQL type".to_owned(),
-            ))
+            ));
         }
-        DataType::Varchar(len) | DataType::CharacterVarying(len) => {
-            match length(len.as_ref()) {
-                Some(n) => format!("character varying({n})"),
-                None => "character varying".to_owned(),
-            }
-        }
+        DataType::Varchar(len) | DataType::CharacterVarying(len) => match length(len.as_ref()) {
+            Some(n) => format!("character varying({n})"),
+            None => "character varying".to_owned(),
+        },
         DataType::Char(len) | DataType::Character(len) => match length(len.as_ref()) {
             Some(n) => format!("character({n})"),
             None => "character(1)".to_owned(),
@@ -101,6 +102,11 @@ pub(crate) fn canonical_type(data_type: &DataType) -> Result<String> {
         DataType::Time(prec, tz) => tz_string("time", prec.as_ref().copied(), *tz),
         DataType::Timestamp(prec, tz) => tz_string("timestamp", prec.as_ref().copied(), *tz),
         DataType::Bytea => "bytea".to_owned(),
+        // PostgreSQL Chapter 8 (JSON Types): `json` stores an exact text
+        // copy; `jsonb` stores a decomposed binary representation. Both are
+        // first-class built-in column types with these catalog spellings.
+        DataType::JSON => "json".to_owned(),
+        DataType::JSONB => "jsonb".to_owned(),
         DataType::Bit(len) => match len {
             Some(n) => format!("bit({n})"),
             None => "bit(1)".to_owned(),
@@ -115,7 +121,7 @@ pub(crate) fn canonical_type(data_type: &DataType) -> Result<String> {
         other => {
             return Err(Error::Serialization(format!(
                 "unsupported data type {other:?}"
-            )))
+            )));
         }
     };
     Ok(out)
@@ -149,7 +155,7 @@ fn array_string(elem: &ArrayElemTypeDef) -> Result<String> {
         ArrayElemTypeDef::None => {
             return Err(Error::Serialization(
                 "ARRAY without an element type is not a PostgreSQL column type".to_owned(),
-            ))
+            ));
         }
     };
     Ok(format!("{inner}[]"))
@@ -181,15 +187,16 @@ fn custom_canonical(name: &ObjectName) -> Result<String> {
             ObjectNamePart::Function(function) => {
                 return Err(Error::Serialization(format!(
                     "unsupported type name part {function:?}"
-                )))
+                )));
             }
         }
     }
     let joined = rendered.join(".");
     if rendered.len() == 1
-        && let Some(al) = alias(&joined) {
-            return Ok(al);
-        }
+        && let Some(al) = alias(&joined)
+    {
+        return Ok(al);
+    }
     Ok(joined)
 }
 

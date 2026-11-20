@@ -9,9 +9,9 @@
 
 use sqlparser::tokenizer::Token;
 
-use super::tokens::{join_tokens, Cursor};
+use super::tokens::{Cursor, join_tokens};
 use super::{
-    ParsedStatement, ParsedSequenceOptions, RawColumn, RawConstraint, RawConstraintKind,
+    ParsedSequenceOptions, ParsedStatement, RawColumn, RawConstraint, RawConstraintKind,
     RawForeignKey, RawTable, parse_fk_actions, parse_sequence_options_paren,
 };
 use crate::error::{Error, Result};
@@ -21,15 +21,41 @@ use crate::model::{Deferrable, IdentityKind};
 /// type-capture). All of them start a column option or the next
 /// column/constraint, so an unquoted occurrence at depth 0 ends the type.
 const COLUMN_TYPE_BOUNDARIES: &[&str] = &[
-    "collate", "constraint", "not", "null", "default", "generated", "unique", "primary",
-    "references", "check", "exclude", "deferrable", "initially", "enforced", "storage",
+    "collate",
+    "constraint",
+    "not",
+    "null",
+    "default",
+    "generated",
+    "unique",
+    "primary",
+    "references",
+    "check",
+    "exclude",
+    "deferrable",
+    "initially",
+    "enforced",
+    "storage",
     "compression",
 ];
 
 /// Words that may follow a column option's expression.
 const EXPR_BOUNDARIES: &[&str] = &[
-    "collate", "constraint", "not", "null", "default", "generated", "unique", "primary",
-    "references", "check", "exclude", "deferrable", "initially", "enforced", "storage",
+    "collate",
+    "constraint",
+    "not",
+    "null",
+    "default",
+    "generated",
+    "unique",
+    "primary",
+    "references",
+    "check",
+    "exclude",
+    "deferrable",
+    "initially",
+    "enforced",
+    "storage",
     "compression",
 ];
 
@@ -50,7 +76,11 @@ pub(crate) fn parse_create(
             text,
         ));
     }
-    if cursor.at_word("TEMPORARY") || cursor.at_word("TEMP") || cursor.at_word("GLOBAL") || cursor.at_word("LOCAL") {
+    if cursor.at_word("TEMPORARY")
+        || cursor.at_word("TEMP")
+        || cursor.at_word("GLOBAL")
+        || cursor.at_word("LOCAL")
+    {
         return Err(Error::unsupported(
             source,
             index,
@@ -133,9 +163,7 @@ pub(crate) fn parse_create(
         return Err(Error::unsupported(
             source,
             index,
-            format!(
-                "table options after the column list are not modelled in milestone 1: {tail}"
-            ),
+            format!("table options after the column list are not modelled in milestone 1: {tail}"),
             text,
         ));
     }
@@ -243,10 +271,21 @@ pub(crate) fn parse_column_def(
     };
     let type_text = cursor.capture_until_words(COLUMN_TYPE_BOUNDARIES);
     if type_text.trim().is_empty() {
-        return Err(Error::parse(source, index, "expected a data type after the column name", text));
+        return Err(Error::parse(
+            source,
+            index,
+            "expected a data type after the column name",
+            text,
+        ));
     }
-    let data_type = super::datatype::normalize_type_text(&type_text)
-        .map_err(|e| Error::parse(source, index, format!("bad data type {type_text:?}: {e}"), text))?;
+    let data_type = super::datatype::normalize_type_text(&type_text).map_err(|e| {
+        Error::parse(
+            source,
+            index,
+            format!("bad data type {type_text:?}: {e}"),
+            text,
+        )
+    })?;
     if super::datatype::is_serial_family(&data_type) {
         return Err(Error::unsupported(
             source,
@@ -273,7 +312,12 @@ pub(crate) fn parse_column_def(
     // Optional collation (per the synopsis, COLLATE precedes constraints).
     if cursor.eat_word("COLLATE") {
         let Some(parts) = cursor.parse_object_name() else {
-            return Err(Error::parse(source, index, "expected a collation name after COLLATE", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected a collation name after COLLATE",
+                text,
+            ));
         };
         out.collation = Some(parts.join("."));
     }
@@ -287,10 +331,21 @@ pub(crate) fn parse_column_def(
             // Named column constraint.
             cursor.advance(1);
             let Some(cname) = cursor.parse_ident() else {
-                return Err(Error::parse(source, index, "expected a constraint name after CONSTRAINT", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected a constraint name after CONSTRAINT",
+                    text,
+                ));
             };
             parse_column_constraint(
-                source, index, cursor, text, &column_name, Some(cname), &mut out,
+                source,
+                index,
+                cursor,
+                text,
+                &column_name,
+                Some(cname),
+                &mut out,
             )?;
             continue;
         }
@@ -330,10 +385,9 @@ fn parse_column_constraint(
     }
     if cursor.eat_word("DEFAULT") {
         let expr_text = cursor.capture_until_words(EXPR_BOUNDARIES);
-        out.default = Some(
-            super::expr::normalize_expr_text(&expr_text)
-                .map_err(|e| Error::parse(source, index, format!("bad DEFAULT expression: {e}"), text))?,
-        );
+        out.default = Some(super::expr::normalize_expr_text(&expr_text).map_err(|e| {
+            Error::parse(source, index, format!("bad DEFAULT expression: {e}"), text)
+        })?);
         return Ok(());
     }
     if cursor.at_word("GENERATED") {
@@ -351,7 +405,12 @@ fn parse_column_constraint(
             ));
         };
         if !cursor.eat_word("AS") {
-            return Err(Error::parse(source, index, "expected AS after GENERATED ALWAYS/BY DEFAULT", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected AS after GENERATED ALWAYS/BY DEFAULT",
+                text,
+            ));
         }
         if cursor.eat_word("IDENTITY") {
             let opts = parse_sequence_options_paren(source, index, cursor, text)?;
@@ -363,10 +422,21 @@ fn parse_column_constraint(
         }
         // Generated column: GENERATED ALWAYS AS (expr) STORED.
         let Some(expr_text) = cursor.capture_paren_group() else {
-            return Err(Error::parse(source, index, "expected '(expression)' after GENERATED ALWAYS AS", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected '(expression)' after GENERATED ALWAYS AS",
+                text,
+            ));
         };
-        let expr = super::expr::normalize_expr_text(&expr_text)
-            .map_err(|e| Error::parse(source, index, format!("bad generation expression: {e}"), text))?;
+        let expr = super::expr::normalize_expr_text(&expr_text).map_err(|e| {
+            Error::parse(
+                source,
+                index,
+                format!("bad generation expression: {e}"),
+                text,
+            )
+        })?;
         if cursor.eat_word("VIRTUAL") {
             return Err(Error::unsupported(
                 source,
@@ -429,7 +499,12 @@ fn parse_column_constraint(
     }
     if cursor.eat_word("CHECK") {
         let Some(expr_text) = cursor.capture_paren_group() else {
-            return Err(Error::parse(source, index, "expected '(expression)' after CHECK", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected '(expression)' after CHECK",
+                text,
+            ));
         };
         if cursor.at_word("NO") {
             return Err(Error::unsupported(
@@ -460,7 +535,9 @@ fn parse_column_constraint(
             text,
         ));
     }
-    if cursor.at_word("ENFORCED") || (cursor.at_word("NOT") && matches!(cursor.peek_nth(1), Some(Token::Word(w)) if w.value.eq_ignore_ascii_case("ENFORCED")))
+    if cursor.at_word("ENFORCED")
+        || (cursor.at_word("NOT")
+            && matches!(cursor.peek_nth(1), Some(Token::Word(w)) if w.value.eq_ignore_ascii_case("ENFORCED")))
     {
         return Err(Error::unsupported(
             source,
@@ -469,7 +546,9 @@ fn parse_column_constraint(
             text,
         ));
     }
-    if cursor.at_word("DEFERRABLE") || (cursor.at_word("NOT") && matches!(cursor.peek_nth(1), Some(Token::Word(w)) if w.value.eq_ignore_ascii_case("DEFERRABLE")))
+    if cursor.at_word("DEFERRABLE")
+        || (cursor.at_word("NOT")
+            && matches!(cursor.peek_nth(1), Some(Token::Word(w)) if w.value.eq_ignore_ascii_case("DEFERRABLE")))
     {
         return Err(Error::invalid(
             source,
@@ -479,11 +558,16 @@ fn parse_column_constraint(
             text,
         ));
     }
-    let found = cursor.peek().map_or_else(|| "end of statement".to_owned(), std::string::ToString::to_string);
+    let found = cursor.peek().map_or_else(
+        || "end of statement".to_owned(),
+        std::string::ToString::to_string,
+    );
     Err(Error::parse(
         source,
         index,
-        format!("expected a column constraint (NOT NULL, DEFAULT, UNIQUE, PRIMARY KEY, REFERENCES, CHECK, GENERATED, COLLATE), found {found}"),
+        format!(
+            "expected a column constraint (NOT NULL, DEFAULT, UNIQUE, PRIMARY KEY, REFERENCES, CHECK, GENERATED, COLLATE), found {found}"
+        ),
         text,
     ))
 }
@@ -491,19 +575,34 @@ fn parse_column_constraint(
 /// Parses `NULLS NOT DISTINCT` / `NULLS DISTINCT` after `UNIQUE`
 /// (PostgreSQL 15+); returns `true` (nulls distinct) unless `NULLS NOT
 /// DISTINCT` was written.
-fn parse_nulls_distinct(source: &str, index: usize, cursor: &mut Cursor, text: &str) -> Result<bool> {
+fn parse_nulls_distinct(
+    source: &str,
+    index: usize,
+    cursor: &mut Cursor,
+    text: &str,
+) -> Result<bool> {
     if !cursor.eat_word("NULLS") {
         return Ok(true);
     }
     if cursor.eat_word("NOT") {
         if !cursor.eat_word("DISTINCT") {
-            return Err(Error::parse(source, index, "expected DISTINCT after NULLS NOT", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected DISTINCT after NULLS NOT",
+                text,
+            ));
         }
         Ok(false)
     } else if cursor.eat_word("DISTINCT") {
         Ok(true)
     } else {
-        Err(Error::parse(source, index, "expected [NOT] DISTINCT after NULLS", text))
+        Err(Error::parse(
+            source,
+            index,
+            "expected [NOT] DISTINCT after NULLS",
+            text,
+        ))
     }
 }
 
@@ -522,7 +621,12 @@ pub(crate) fn parse_deferrable(
             } else if cursor.eat_word("IMMEDIATE") {
                 false
             } else {
-                return Err(Error::parse(source, index, "expected DEFERRED or IMMEDIATE after INITIALLY", text));
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected DEFERRED or IMMEDIATE after INITIALLY",
+                    text,
+                ));
             }
         } else {
             false
@@ -549,7 +653,12 @@ pub(crate) fn parse_reference_tail(
     referencing: Vec<String>,
 ) -> Result<RawForeignKey> {
     let Some(parts) = cursor.parse_object_name() else {
-        return Err(Error::parse(source, index, "expected a table name after REFERENCES", text));
+        return Err(Error::parse(
+            source,
+            index,
+            "expected a table name after REFERENCES",
+            text,
+        ));
     };
     let (ref_schema, ref_table) = match parts.len() {
         1 => ("public".to_owned(), parts[0].clone()),
@@ -560,7 +669,7 @@ pub(crate) fn parse_reference_tail(
                 index,
                 "expected an unqualified or schema-qualified table name after REFERENCES",
                 text,
-            ))
+            ));
         }
     };
     let ref_columns = cursor.parse_ident_list_paren();
@@ -590,7 +699,12 @@ pub(crate) fn parse_table_constraint(
     let mut name = None;
     if cursor.eat_word("CONSTRAINT") {
         let Some(cname) = cursor.parse_ident() else {
-            return Err(Error::parse(source, index, "expected a constraint name after CONSTRAINT", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected a constraint name after CONSTRAINT",
+                text,
+            ));
         };
         name = Some(cname);
     }
@@ -617,7 +731,12 @@ pub(crate) fn parse_table_constraint(
     }
     if cursor.eat_words2("PRIMARY", "KEY") {
         let Some(columns) = cursor.parse_ident_list_paren() else {
-            return Err(Error::parse(source, index, "expected a column list after PRIMARY KEY", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected a column list after PRIMARY KEY",
+                text,
+            ));
         };
         reject_index_parameters(source, index, cursor, text, "PRIMARY KEY")?;
         let deferrable = parse_deferrable(source, index, cursor, text)?;
@@ -632,7 +751,12 @@ pub(crate) fn parse_table_constraint(
     if cursor.eat_word("UNIQUE") {
         let nulls_distinct = parse_nulls_distinct(source, index, cursor, text)?;
         let Some(columns) = cursor.parse_ident_list_paren() else {
-            return Err(Error::parse(source, index, "expected a column list after UNIQUE", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected a column list after UNIQUE",
+                text,
+            ));
         };
         if cursor.at_word("WITHOUT") {
             return Err(Error::unsupported(
@@ -657,7 +781,12 @@ pub(crate) fn parse_table_constraint(
     }
     if cursor.eat_word("CHECK") {
         let Some(expr_text) = cursor.capture_paren_group() else {
-            return Err(Error::parse(source, index, "expected '(expression)' after CHECK", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected '(expression)' after CHECK",
+                text,
+            ));
         };
         if cursor.at_word("NO") {
             return Err(Error::unsupported(
@@ -679,7 +808,12 @@ pub(crate) fn parse_table_constraint(
     }
     if cursor.eat_words2("FOREIGN", "KEY") {
         let Some(columns) = cursor.parse_ident_list_paren() else {
-            return Err(Error::parse(source, index, "expected a column list after FOREIGN KEY", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected a column list after FOREIGN KEY",
+                text,
+            ));
         };
         if cursor.at_word("PERIOD") {
             return Err(Error::unsupported(
@@ -690,7 +824,12 @@ pub(crate) fn parse_table_constraint(
             ));
         }
         if !cursor.eat_word("REFERENCES") {
-            return Err(Error::parse(source, index, "expected REFERENCES after FOREIGN KEY (...)", text));
+            return Err(Error::parse(
+                source,
+                index,
+                "expected REFERENCES after FOREIGN KEY (...)",
+                text,
+            ));
         }
         let fk = parse_reference_tail(source, index, cursor, text, columns)?;
         if cursor.at_word("PERIOD") {

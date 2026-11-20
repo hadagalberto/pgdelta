@@ -10,8 +10,7 @@
 //! without a destructive rewrite, so pgdelta never plans a reorder.
 
 use crate::model::{
-    Catalog, Column, Constraint, ConstraintKind, Deferrable, Extension, Index, PUBLIC_SCHEMA,
-    Table,
+    Catalog, Column, Constraint, ConstraintKind, Deferrable, Extension, Index, PUBLIC_SCHEMA, Table,
 };
 
 /// One modelled difference between two catalogs.
@@ -318,17 +317,20 @@ fn diff_table(from: &Table, to: &Table) -> Vec<AlterChange> {
         }
     }
     for constraint in &to.constraints {
-        let Some(old) = from
-            .constraints
-            .iter()
-            .find(|c| c.name == constraint.name)
-        else {
+        let Some(old) = from.constraints.iter().find(|c| c.name == constraint.name) else {
             adds.push(AlterChange::AddConstraint {
                 constraint: constraint.clone(),
             });
             continue;
         };
-        diff_constraint(old, constraint, &mut drops, &mut adds, &mut validates, &mut deferrables);
+        diff_constraint(
+            old,
+            constraint,
+            &mut drops,
+            &mut adds,
+            &mut validates,
+            &mut deferrables,
+        );
     }
 
     // Fixed sub-order per table: constraint drops, column drops, column
@@ -393,9 +395,7 @@ fn diff_column(
         drops.push(AlterChange::DropColumn {
             name: from.name.clone(),
         });
-        adds.push(AlterChange::AddColumn {
-            column: to.clone(),
-        });
+        adds.push(AlterChange::AddColumn { column: to.clone() });
         return;
     }
 

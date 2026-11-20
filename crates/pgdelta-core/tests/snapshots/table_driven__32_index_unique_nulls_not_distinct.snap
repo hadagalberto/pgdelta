@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <32_index_unique_nulls_not_distinct/from.sql>
+-- to:   <32_index_unique_nulls_not_distinct/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE UNIQUE INDEX "public"."uq_events_ref" ON "public"."events" ("ref") NULLS NOT DISTINCT;
+
+COMMIT;

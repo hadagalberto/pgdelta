@@ -1,0 +1,20 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <05_extension_move_schema/from.sql>
+-- to:   <05_extension_move_schema/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+DROP EXTENSION "pg_trgm";
+
+CREATE SCHEMA "search";
+
+CREATE EXTENSION "pg_trgm" WITH SCHEMA "search";
+
+COMMIT;

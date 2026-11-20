@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.1.0 migration
+-- from: <13_collation_change/from.sql>
+-- to:   <13_collation_change/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TABLE "public"."docs" ALTER COLUMN "body" TYPE text COLLATE "C";
+
+COMMIT;
