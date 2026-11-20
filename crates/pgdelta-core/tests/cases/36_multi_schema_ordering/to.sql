@@ -1,6 +1,6 @@
 CREATE SCHEMA sales;
 CREATE SCHEMA crm;
-CREATE TABLE sales.customers (id bigint PRIMARY KEY, region text);
+CREATE TABLE sales.customers (id bigint PRIMARY KEY, region bigint);
 CREATE TABLE sales.regions (id bigint PRIMARY KEY);
 CREATE TABLE crm.contacts (id bigint PRIMARY KEY);
 CREATE TABLE crm.notes (id bigint PRIMARY KEY, contact_id bigint REFERENCES crm.contacts (id));

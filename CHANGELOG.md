@@ -6,6 +6,32 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] — milestone 3
+
+### Added
+
+- Live source support: `postgres://` sources are introspected from
+  `pg_catalog` with `tokio-postgres` (rustls for TLS connections), covering
+  every modelled object kind on PostgreSQL 13–18.
+- `--shadow postgres://...` for `diff` and `inspect`: SQL sources are applied
+  to a dedicated shadow database (created on first use, emptied on every
+  load) and introspected, which is the SPEC's most accurate source mode.
+- Live convergence tests for all 75 snapshot cases: apply `from`, run the
+  generated migration, introspect, and verify the diff against the introspected
+  `to` is empty. Parity tests assert the SQL-file model equals the live model;
+  shadow-mode tests assert the shadow model matches the SQL-file model. No
+  `pg_dump` binary is required. Tests skip with a printed reason when
+  `PGDELTA_TEST_DATABASE_URL` is unset.
+
+### Fixed
+
+- `ALTER COLUMN ... TYPE` now re-applies a column default *after* the type
+  change (the lexicographic statement key previously put `SET DEFAULT` first,
+  leaving a stale cast on the live column).
+- Identity drops are ordered before `DROP NOT NULL`, as PostgreSQL requires.
+- `CREATE INDEX ... USING <method> (<columns>)` now includes the required space
+  before the column list.
+
 ## [0.2.0] — milestone 2
 
 ### Added

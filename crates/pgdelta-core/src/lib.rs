@@ -18,6 +18,7 @@ pub mod apply_objects;
 pub mod dep;
 pub mod diff;
 pub mod error;
+pub mod introspect;
 pub mod model;
 pub mod naming;
 pub mod plan;
@@ -25,6 +26,7 @@ pub mod source;
 pub mod sql;
 
 pub use error::{Error, Result};
+pub use introspect::{catalog_from_url, catalog_from_url_blocking, connect, introspect};
 pub use model::{
     ArgMode, Catalog, CheckOption, Column, CompositeAttribute, Constraint, ConstraintKind,
     Deferrable, DomainConstraint, DomainConstraintKind, Extension, FkAction, FkMatch, Generated,
@@ -34,4 +36,7 @@ pub use model::{
     SequenceOwner, Table, Trigger, TriggerEvent, TriggerLevel, TriggerTiming, View, Volatility,
 };
 pub use plan::{Plan, PlanSection, PlanStatement, PlanSummary, plan};
-pub use source::{SourceSpec, apply_sql_to, catalog_from_sql, load_catalog, split_sql_statements};
+pub use source::{
+    SourceSpec, apply_sql_to, catalog_from_sql, load_catalog, load_catalog_with_shadow,
+    load_catalog_with_shadow_async, split_sql_statements,
+};

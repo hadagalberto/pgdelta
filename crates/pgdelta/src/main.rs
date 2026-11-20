@@ -1,10 +1,12 @@
 //! pgdelta: diff two PostgreSQL schemas and generate a safe, ordered
 //! migration script.
 //!
-//! Milestone-1 scope: `diff` (SQL/JSON output) and `inspect` for the
-//! SQL-file and SQL-directory sources. Live-database sources, the
-//! `--online` rewrite mode and the `lint` subcommand land with their
-//! milestones (see `docs/parser.md` and the roadmap in `README.md`).
+//! `diff` (SQL/JSON output) and `inspect` support SQL files, SQL directories
+//! and live `postgres://` sources. `--shadow postgres://...` applies a SQL
+//! source to a throwaway database and introspects it, which is the most
+//! accurate source mode because PostgreSQL itself validates and normalises
+//! the DDL. The `--online` rewrite mode and `lint` land with their milestones
+//! (see `docs/parser.md` and the roadmap in `README.md`).
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -12,7 +14,7 @@ use std::process::ExitCode;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
-use pgdelta_core::{SourceSpec, load_catalog, plan};
+use pgdelta_core::{SourceSpec, load_catalog_with_shadow, plan};
 
 /// Exit code used when an operational error occurred.
 const EXIT_ERROR: u8 = 1;
@@ -62,12 +64,16 @@ enum Commands {
 #[derive(clap::Args)]
 struct DiffArgs {
     /// Source the migration starts from: a `.sql` file, a directory of
-    /// `.sql` files, or (from milestone 2) a `postgres://` URL.
+    /// `.sql` files, or a `postgres://` URL.
     #[arg(long)]
     from: String,
     /// Source the migration converges to: same forms as `--from`.
     #[arg(long)]
     to: String,
+    /// Apply SQL sources to a fresh database on this server and introspect
+    /// the result instead of parsing them in-process.
+    #[arg(long, value_name = "URL")]
+    shadow: Option<String>,
     /// Write the script to this file instead of stdout.
     #[arg(short, long, value_name = "FILE")]
     output: Option<PathBuf>,
@@ -80,9 +86,13 @@ struct DiffArgs {
 /// Arguments of `pgdelta inspect`.
 #[derive(clap::Args)]
 struct InspectArgs {
-    /// The source to inspect: a `.sql` file or a directory of `.sql`
-    /// files.
+    /// The source to inspect: a `.sql` file, a directory of `.sql`
+    /// files, or a `postgres://` URL.
     source: String,
+    /// Apply a SQL source to a fresh database on this server and introspect
+    /// the result instead of parsing it in-process.
+    #[arg(long, value_name = "URL")]
+    shadow: Option<String>,
 }
 
 fn run_diff(args: &DiffArgs) -> Result<ExitCode, anyhow::Error> {
@@ -91,10 +101,10 @@ fn run_diff(args: &DiffArgs) -> Result<ExitCode, anyhow::Error> {
     let to_spec =
         SourceSpec::parse(&args.to).with_context(|| format!("parsing --to {:?}", args.to))?;
 
-    let from = load_catalog(&from_spec)
+    let from = load_catalog_with_shadow(&from_spec, args.shadow.as_deref())
         .with_context(|| format!("loading --from ({})", from_spec.describe()))?;
-    let to =
-        load_catalog(&to_spec).with_context(|| format!("loading --to ({})", to_spec.describe()))?;
+    let to = load_catalog_with_shadow(&to_spec, args.shadow.as_deref())
+        .with_context(|| format!("loading --to ({})", to_spec.describe()))?;
 
     let planned = plan(&from, &to, &from_spec.describe(), &to_spec.describe())
         .context("planning the migration")?;
@@ -136,8 +146,8 @@ fn write_output(args: &DiffArgs, bytes: &[u8]) -> Result<(), anyhow::Error> {
 fn run_inspect(args: &InspectArgs) -> Result<ExitCode, anyhow::Error> {
     let spec = SourceSpec::parse(&args.source)
         .with_context(|| format!("parsing source {:?}", args.source))?;
-    let catalog =
-        load_catalog(&spec).with_context(|| format!("loading source ({})", spec.describe()))?;
+    let catalog = load_catalog_with_shadow(&spec, args.shadow.as_deref())
+        .with_context(|| format!("loading source ({})", spec.describe()))?;
     let json = catalog.to_json();
     println!("{}", serde_json::to_string_pretty(&json)?);
     Ok(ExitCode::SUCCESS)

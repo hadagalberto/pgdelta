@@ -22,7 +22,7 @@ CREATE TABLE "public"."t" (
 CREATE TABLE "public"."t2" (
     "a" integer,
     CONSTRAINT "t2_a_check" CHECK ("a" > 0),
-    CONSTRAINT "t2_check" CHECK ("a" < 10)
+    CONSTRAINT "t2_a_check1" CHECK ("a" < 10)
 );
 
 ALTER TABLE "public"."t" ADD CONSTRAINT "t_a_fkey" FOREIGN KEY ("a") REFERENCES "public"."u" ("id");

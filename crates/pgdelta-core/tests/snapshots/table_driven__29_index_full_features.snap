@@ -11,10 +11,10 @@ expression: script
 
 BEGIN;
 
-CREATE INDEX "public"."idx_events_created_brin" ON "public"."events" USING "brin" ("created_at");
+CREATE INDEX "idx_events_created_brin" ON "public"."events" USING "brin"  ("created_at");
 
-CREATE INDEX "public"."idx_events_kind_created" ON "public"."events" ("kind" "text_pattern_ops" DESC NULLS LAST, "created_at") INCLUDE ("body") WITH ("fillfactor" = 70) WHERE "kind" is not null;
+CREATE INDEX "idx_events_kind_created" ON "public"."events" ("kind" "text_pattern_ops" DESC NULLS LAST, "created_at") INCLUDE ("body") WITH ("fillfactor" = 70) WHERE "kind" is not null;
 
-CREATE INDEX "public"."idx_events_lower_body" ON "public"."events" (("lower"("body")));
+CREATE INDEX "idx_events_lower_body" ON "public"."events" (("lower"("body")));
 
 COMMIT;

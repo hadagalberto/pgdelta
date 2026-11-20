@@ -896,7 +896,7 @@ fn render_alter_statements(
             if from_default.is_some() {
                 out.push((
                     rank::ALTER,
-                    format!("type-drop-default:{column}"),
+                    format!("type-0-drop-default:{column}"),
                     format!("{table}.{column}"),
                     format!(
                         "ALTER TABLE {target} ALTER COLUMN {} DROP DEFAULT;",
@@ -915,14 +915,14 @@ fn render_alter_statements(
             sql.push(';');
             out.push((
                 rank::ALTER,
-                format!("type:{column}"),
+                format!("type-1-change:{column}"),
                 format!("{table}.{column}"),
                 sql,
             ));
             if let Some(default) = to_default {
                 out.push((
                     rank::ALTER,
-                    format!("type-set-default:{column}"),
+                    format!("type-2-set-default:{column}"),
                     format!("{table}.{column}"),
                     format!(
                         "ALTER TABLE {target} ALTER COLUMN {} SET DEFAULT {};",
@@ -1259,11 +1259,14 @@ fn render_create_index(index: &Index) -> String {
     if index.concurrent {
         out.push_str("CONCURRENTLY ");
     }
-    out.push_str(&qualified(&index.schema, &index.name));
+    // CREATE INDEX does not accept a schema-qualified index name: the index
+    // is always created in the table's schema. DROP INDEX, in contrast, may
+    // be qualified (PostgreSQL docs, CREATE INDEX / DROP INDEX).
+    out.push_str(&quote_ident(&index.name));
     out.push_str(" ON ");
     out.push_str(&qualified(&index.table_schema, &index.table));
     if let Some(method) = &index.method {
-        out.push_str(&format!(" USING {}", quote_ident(method)));
+        out.push_str(&format!(" USING {} ", quote_ident(method)));
     }
     let elems: Vec<String> = index
         .columns

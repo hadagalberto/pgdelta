@@ -11,8 +11,8 @@ expression: script
 
 BEGIN;
 
-ALTER TABLE "public"."users" ALTER COLUMN "id" DROP NOT NULL;
-
 ALTER TABLE "public"."users" ALTER COLUMN "id" DROP IDENTITY;
+
+ALTER TABLE "public"."users" ALTER COLUMN "id" DROP NOT NULL;
 
 COMMIT;

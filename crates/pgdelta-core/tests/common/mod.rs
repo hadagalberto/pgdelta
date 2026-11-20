@@ -60,7 +60,7 @@ pub fn load_cases() -> Vec<Case> {
         .collect()
 }
 
-fn cases_root() -> PathBuf {
+pub fn cases_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/cases")
 }
 
@@ -77,6 +77,7 @@ fn read_min_version(dir: &Path) -> i32 {
 }
 
 /// Runs the two case properties and returns the rendered script.
+#[allow(dead_code)]
 pub fn run_case(case: &Case) -> String {
     let from = catalog_from_sql(&case.from_sql, "from.sql").expect("parsing from.sql");
     let to = catalog_from_sql(&case.to_sql, "to.sql").expect("parsing to.sql");
@@ -101,6 +102,7 @@ pub fn run_case(case: &Case) -> String {
 }
 
 /// Model equality modulo physical column order (see the module docs).
+#[allow(dead_code)]
 pub fn assert_equivalent(actual: &Catalog, expected: &Catalog, context: &str) {
     // Schemas: every non-ambient schema matches.
     let actual_schemas: Vec<&String> = actual

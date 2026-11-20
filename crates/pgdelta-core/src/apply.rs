@@ -295,6 +295,25 @@ fn build_column(source: &str, index: usize, raw: &RawColumn, text: &str) -> Resu
     })
 }
 
+/// Returns the sole quoted identifier of a normalised CHECK expression, if
+/// there is exactly one distinct one. Normalised expressions always quote
+/// identifiers (see `sql/expr.rs`), so a simple scan is exact.
+fn single_check_column(expr: &str) -> Option<&str> {
+    let parts: Vec<&str> = expr.split('"').collect();
+    let mut found: Option<&str> = None;
+    for &identifier in parts.iter().skip(1).step_by(2) {
+        if identifier.is_empty() {
+            continue;
+        }
+        match found {
+            None => found = Some(identifier),
+            Some(existing) if existing == identifier => {}
+            Some(_) => return None,
+        }
+    }
+    found
+}
+
 /// Auto-names an unnamed constraint exactly as PostgreSQL does, per
 /// `ChooseConstraintName` / `ChooseIndexName` (see `naming.rs` for the
 /// cited sources).
@@ -328,10 +347,19 @@ fn auto_name(
             &constraints_taken,
             others,
         ),
-        RawConstraintKind::Check { .. } => {
-            // Column-level checks name as table_column_check; table-level
-            // as table_check (both via ChooseConstraintName).
-            let name2 = constraint.column_level.as_deref();
+        RawConstraintKind::Check { expr } => {
+            // PostgreSQL's ChooseConstraintName uses the single column
+            // referenced by an unnamed CHECK expression as its name2, even
+            // for a table-level CHECK (src/backend/commands/tablecmds.c,
+            // StoreConstraints). Without that, two checks on the same column
+            // get `t_check`/`t_check1` instead of the server's
+            // `t_a_check`/`t_a_check1`.
+            let derived = if constraint.column_level.is_none() {
+                single_check_column(expr)
+            } else {
+                None
+            };
+            let name2 = constraint.column_level.as_deref().or(derived);
             naming::auto_constraint_name(table, name2, "check", &constraints_taken, others)
         }
         RawConstraintKind::ForeignKey(fk) => naming::auto_constraint_name(

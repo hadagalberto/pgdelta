@@ -212,3 +212,41 @@ base/shell types, role membership grants, `GRANT ... ALL ... IN SCHEMA`,
 column-level grants, transition relations in triggers, extension ownership,
 and generated-expression rewriting on rename. Unsupported forms are
 rejected with a source-located error rather than silently dropped.
+
+## Live introspection and shadow sources (milestone 3)
+
+A `postgres://` source is introspected through `pg_catalog` with
+`tokio-postgres` (`src/introspect.rs`). No `information_schema` views and no
+`pg_dump` subprocess are used; the queries are valid on PostgreSQL 13–18 and
+gate version-specific columns (`indnullsnotdistinct`, the unique-constraint
+nulls flag read via its backing index) behind a `SHOW server_version_num`
+check.
+
+Parity with a SQL file is achieved by feeding the catalog's deparsed values
+through the *same* normalisers used by the SQL parser:
+
+* `format_type(...)` → `sql::datatype::normalize_type_text`;
+* `pg_get_expr(...)` → `sql::expr::normalize_expr_text` (with one balanced
+  pair of parentheses removed from CHECK expressions, which `pg_get_expr`
+  always adds);
+* `pg_get_viewdef(...)` → the same token join used for view bodies;
+* index expressions and predicates → `normalize_expr_text`.
+
+Catalog columns and deparsing helpers are cited in the module documentation
+at the top of `src/introspect.rs` (PostgreSQL 18 catalog and functions-info
+reference pages). TLS uses `tokio-postgres-rustls` with the bundled Mozilla
+root store when `sslmode=require|verify-ca|verify-full` (or `ssl=true`) is
+present in the URL; local/CI service containers use `NoTls`.
+
+`--shadow postgres://...` applies a SQL source statement-by-statement to a
+dedicated database (`pgdelta_shadow`) on that server: it is created on first
+use and emptied before every load (user schemas and non-default extensions
+are dropped). Because PostgreSQL performs its own expression
+deparsing, name resolution and constraint inference, this is the most
+accurate SQL source mode. The integration tests assert that the shadow model
+equals the in-process SQL model for every snapshot case.
+
+The live tests (in `tests/live_postgres.rs`) require
+`PGDELTA_TEST_DATABASE_URL`; when it is unset they print a skip reason and
+return. CI sets it for a `postgres:13` … `postgres:18` service-container
+matrix.

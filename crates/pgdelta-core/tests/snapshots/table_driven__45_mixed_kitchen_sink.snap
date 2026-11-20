@@ -43,6 +43,6 @@ ALTER TABLE "public"."audit_log" ADD COLUMN "severity" text;
 
 ALTER TABLE "finance"."transactions" ADD CONSTRAINT "transactions_account_id_fkey" FOREIGN KEY ("account_id") REFERENCES "finance"."accounts" ("id");
 
-CREATE INDEX "public"."idx_audit_severity" ON "public"."audit_log" ("severity") WHERE "severity" is not null;
+CREATE INDEX "idx_audit_severity" ON "public"."audit_log" ("severity") WHERE "severity" is not null;
 
 COMMIT;

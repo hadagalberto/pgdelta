@@ -11,6 +11,6 @@ expression: script
 
 BEGIN;
 
-CREATE UNIQUE INDEX "public"."uq_events_ref" ON "public"."events" ("ref") NULLS NOT DISTINCT;
+CREATE UNIQUE INDEX "uq_events_ref" ON "public"."events" ("ref") NULLS NOT DISTINCT;
 
 COMMIT;

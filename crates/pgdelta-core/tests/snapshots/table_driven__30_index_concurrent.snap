@@ -12,4 +12,4 @@ expression: script
 
 -- Non-transactional section (cannot run inside a transaction block):
 
-CREATE INDEX CONCURRENTLY "public"."idx_events_kind" ON "public"."events" ("kind");
+CREATE INDEX CONCURRENTLY "idx_events_kind" ON "public"."events" ("kind");

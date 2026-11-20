@@ -71,7 +71,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - name: Install pg_dump
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
-      - name: Snapshot, property and live convergence tests
-        run: cargo test --workspace -- --nocapture
+      - name: Snapshot, property, parity and live convergence tests
+        # Introspection is in-process (tokio-postgres): no pg_dump binary is
+        # needed. Serial execution keeps throwaway-database creation bounded.
+        run: cargo test --workspace -- --nocapture --test-threads=1

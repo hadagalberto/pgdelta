@@ -13,8 +13,8 @@ BEGIN;
 
 ALTER TABLE "public"."notes" ALTER COLUMN "body" DROP DEFAULT;
 
-ALTER TABLE "public"."notes" ALTER COLUMN "body" SET DEFAULT 'x';
-
 ALTER TABLE "public"."notes" ALTER COLUMN "body" TYPE character varying(500);
+
+ALTER TABLE "public"."notes" ALTER COLUMN "body" SET DEFAULT 'x';
 
 COMMIT;

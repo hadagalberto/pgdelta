@@ -73,6 +73,15 @@ pub enum Error {
     /// An error while serializing the model or plan.
     #[error("serialization error: {0}")]
     Serialization(String),
+
+    /// An error talking to a live PostgreSQL server.
+    #[error("database error while {context}: {inner}")]
+    Database {
+        /// What pgdelta was doing when the error happened.
+        context: String,
+        /// The underlying driver error.
+        inner: tokio_postgres::Error,
+    },
 }
 
 impl Error {

@@ -940,8 +940,13 @@ fn diff_column(
             }),
         }
     }
-    if from.not_null != to.not_null {
-        alters.push(if to.not_null {
+    // PostgreSQL requires the column to be NOT NULL before identity can be
+    // added, but forbids DROP NOT NULL while the column is still an identity
+    // column. Order the two changes accordingly so both directions execute
+    // on PostgreSQL 13–18.
+    let dropping_identity = from.identity.is_some() && to.identity.is_none();
+    let not_null_change = (from.not_null != to.not_null).then(|| {
+        if to.not_null {
             AlterChange::SetNotNull {
                 column: to.name.clone(),
             }
@@ -949,9 +954,19 @@ fn diff_column(
             AlterChange::DropNotNull {
                 column: to.name.clone(),
             }
-        });
+        }
+    });
+    if dropping_identity {
+        diff_identity(from, to, alters);
+        if let Some(change) = not_null_change {
+            alters.push(change);
+        }
+    } else {
+        if let Some(change) = not_null_change {
+            alters.push(change);
+        }
+        diff_identity(from, to, alters);
     }
-    diff_identity(from, to, alters);
 }
 
 /// Diffs the identity specification of a column (both sides exist).

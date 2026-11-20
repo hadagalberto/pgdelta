@@ -1,25 +1,30 @@
 //! Sources: how a `--from`/`--to` argument becomes a catalog.
 //!
-//! Milestone 1 implements the SQL-file and SQL-directory sources: the
-//! files are applied to a throwaway in-memory model exactly as the SPEC
-//! describes — parse DDL statements, apply `ALTER`s in order. A
-//! directory source walks recursively, reads every `.sql` file in
+//! SQL-file and SQL-directory sources are applied to a throwaway in-memory
+//! model exactly as the SPEC describes — parse DDL statements, apply `ALTER`s
+//! in order. A directory source walks recursively, reads every `.sql` file in
 //! deterministic (sorted by relative path) order, and concatenates them;
-//! statement indices in error messages stay honest across the
-//! concatenation.
+//! statement indices in error messages stay honest across the concatenation.
+//!
+//! A `postgres://` source is introspected live through `pg_catalog`. When
+//! `--shadow postgres://...` is supplied for a SQL source, the SQL is instead
+//! executed against a fresh throwaway database and the resulting catalog is
+//! introspected — the SPEC's most accurate mode, because PostgreSQL itself
+//! validates and normalises every statement (including expression deparsing,
+//! generated names and constraint inference).
 
 use std::path::{Path, PathBuf};
 
 use crate::apply::apply_statements;
 use crate::error::{Error, Result};
+use crate::introspect;
 use crate::model::Catalog;
 use crate::sql;
 
 /// A source specification from the command line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceSpec {
-    /// A live database connection string. Parsing is implemented in
-    /// milestone 1; loading is milestone 2 (live introspection).
+    /// A live database connection string, introspected through `pg_catalog`.
     Postgres(String),
     /// A single `.sql` file.
     SqlFile(PathBuf),
@@ -30,9 +35,9 @@ pub enum SourceSpec {
 impl SourceSpec {
     /// Parses a `--from`/`--to` argument.
     ///
-    /// `postgres://`/`postgresql://` URLs select the (future) live
-    /// source; an existing directory selects the directory source;
-    /// anything else is treated as a file path.
+    /// `postgres://`/`postgresql://` URLs select the live source; an
+    /// existing directory selects the directory source; anything else is
+    /// treated as a file path.
     ///
     /// # Errors
     ///
@@ -71,38 +76,198 @@ impl SourceSpec {
 ///
 /// # Errors
 ///
-/// Returns an error for the not-yet-implemented live source, for I/O
-/// failures, and when the SQL is invalid, unsupported or inconsistent
-/// (mirroring PostgreSQL's own rejections — see `docs/parser.md`).
+/// Returns an error for I/O failures, invalid SQL, or a failed live
+/// introspection (see [`introspect`]).
 pub fn load_catalog(spec: &SourceSpec) -> Result<Catalog> {
     match spec {
-        SourceSpec::Postgres(url) => Err(Error::Unsupported {
-            origin: url.clone(),
-            index: 0,
-            message: "live database sources are planned for milestone 2 (tokio-postgres \
-                      introspection over pg_catalog); milestone 1 supports .sql files and \
-                      directories"
-                .to_owned(),
-            statement: String::new(),
-        }),
+        SourceSpec::Postgres(url) => introspect::catalog_from_url_blocking(url),
         SourceSpec::SqlFile(path) => {
             let text = read_file(path)?;
             let name = path.display().to_string();
             catalog_from_sql(&text, &name)
         }
         SourceSpec::SqlDir(dir) => {
-            let files = collect_sql_files(dir)?;
-            let mut full = String::new();
-            for file in &files {
-                let text = read_file(file)?;
-                if !full.is_empty() {
-                    full.push_str("\n\n");
-                }
-                full.push_str(&text);
-            }
-            catalog_from_sql(&full, &dir.display().to_string())
+            catalog_from_sql(&sql_dir_text(dir)?, &dir.display().to_string())
         }
     }
+}
+
+/// Async counterpart of [`load_catalog_with_shadow`], for callers that
+/// already run inside a Tokio runtime (notably the integration tests).
+///
+/// # Errors
+///
+/// See [`load_catalog_with_shadow`].
+pub async fn load_catalog_with_shadow_async(
+    spec: &SourceSpec,
+    shadow_url: Option<&str>,
+) -> Result<Catalog> {
+    match (spec, shadow_url) {
+        (SourceSpec::Postgres(url), _) => introspect::catalog_from_url(url).await,
+        (_, None) => load_catalog(spec),
+        (SourceSpec::SqlFile(_) | SourceSpec::SqlDir(_), Some(url)) => {
+            shadow_catalog(spec, url).await
+        }
+    }
+}
+
+/// Loads a catalog from a source, using a shadow PostgreSQL database for SQL
+/// sources when `shadow_url` is `Some`. Live sources are introspected
+/// directly; the shadow URL is ignored for them.
+///
+/// The shadow URL must point to a database whose role can `CREATE DATABASE`.
+/// A dedicated shadow database is created on first use and emptied before
+/// every load, so no state leaks between sources.
+///
+/// # Errors
+///
+/// See [`load_catalog`] and [`shadow_catalog`].
+pub fn load_catalog_with_shadow(spec: &SourceSpec, shadow_url: Option<&str>) -> Result<Catalog> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|inner| Error::Internal {
+            message: format!("building the source runtime: {inner}"),
+        })?;
+    runtime.block_on(load_catalog_with_shadow_async(spec, shadow_url))
+}
+
+fn sql_dir_text(dir: &Path) -> Result<String> {
+    let files = collect_sql_files(dir)?;
+    let mut full = String::new();
+    for file in &files {
+        let text = read_file(file)?;
+        if !full.is_empty() {
+            full.push_str("\n\n");
+        }
+        full.push_str(&text);
+    }
+    Ok(full)
+}
+
+/// Name of the dedicated database used for shadow-mode loads. It is created
+/// on first use and emptied before every load, so no state leaks between
+/// sources without the cost of creating a database per source.
+pub const SHADOW_DATABASE: &str = "pgdelta_shadow";
+
+fn with_database(base: &str, database: &str) -> String {
+    let (scheme, rest) = base.split_once("://").unwrap_or(("postgres", base));
+    let (authority, tail) = match rest.find('/') {
+        Some(index) => (&rest[..index], &rest[index..]),
+        None => (rest, ""),
+    };
+    let query = tail.find('?').map_or("", |index| &tail[index..]);
+    format!("{scheme}://{authority}/{database}{query}")
+}
+
+/// Applies a SQL source to the dedicated shadow database, introspects it,
+/// and returns the model. The database is emptied before every load: user
+/// schemas (with all their objects) and non-default extensions are dropped.
+async fn shadow_catalog(spec: &SourceSpec, shadow_url: &str) -> Result<Catalog> {
+    let sql_text = match spec {
+        SourceSpec::SqlFile(path) => read_file(path)?,
+        SourceSpec::SqlDir(dir) => sql_dir_text(dir)?,
+        SourceSpec::Postgres(url) => return introspect::catalog_from_url(url).await,
+    };
+    let admin_url = shadow_url.to_owned();
+    let (admin, admin_driver) = introspect::connect(&admin_url).await?;
+    let check = format!("SELECT 1 FROM pg_database WHERE datname = '{SHADOW_DATABASE}'");
+    let exists = admin
+        .query_opt(&check, &[])
+        .await
+        .map_err(|inner| Error::Database {
+            context: "checking for the shadow database".to_owned(),
+            inner,
+        })?;
+    if exists.is_none() {
+        let create = format!("CREATE DATABASE \"{SHADOW_DATABASE}\"");
+        admin
+            .execute(&create, &[])
+            .await
+            .map_err(|inner| Error::Database {
+                context: format!("creating shadow database {SHADOW_DATABASE}"),
+                inner,
+            })?;
+    }
+    drop(admin);
+    admin_driver.abort();
+
+    let shadow_db_url = with_database(&admin_url, SHADOW_DATABASE);
+    let description = spec.describe();
+    let (client, driver) = introspect::connect(&shadow_db_url).await?;
+    let result = async {
+        reset_database(&client).await?;
+        for statement in split_sql_statements(&sql_text)? {
+            client
+                .batch_execute(&statement)
+                .await
+                .map_err(|inner| Error::Database {
+                    context: format!("applying {description} to the shadow database"),
+                    inner,
+                })?;
+        }
+        introspect::introspect(&client).await
+    }
+    .await;
+    drop(client);
+    driver.abort();
+    result
+}
+
+/// Empties all user objects from a database. System schemas and `public`
+/// (which is recreated empty) are left in place.
+async fn reset_database(client: &tokio_postgres::Client) -> Result<()> {
+    let extensions = client
+        .query(
+            "SELECT extname FROM pg_extension WHERE extname <> 'plpgsql'",
+            &[],
+        )
+        .await
+        .map_err(|inner| Error::Database {
+            context: "listing shadow extensions".to_owned(),
+            inner,
+        })?;
+    for row in &extensions {
+        let name: String = row.get(0);
+        let sql = format!("DROP EXTENSION IF EXISTS \"{name}\" CASCADE");
+        client
+            .batch_execute(&sql)
+            .await
+            .map_err(|inner| Error::Database {
+                context: format!("dropping shadow extension {name}"),
+                inner,
+            })?;
+    }
+    let schemas = client
+        .query(
+            "SELECT nspname FROM pg_namespace \
+             WHERE nspname NOT IN ('pg_catalog', 'information_schema', 'public') \
+               AND nspname NOT LIKE 'pg\\_%'",
+            &[],
+        )
+        .await
+        .map_err(|inner| Error::Database {
+            context: "listing shadow schemas".to_owned(),
+            inner,
+        })?;
+    for row in &schemas {
+        let name: String = row.get(0);
+        let sql = format!("DROP SCHEMA IF EXISTS \"{name}\" CASCADE");
+        client
+            .batch_execute(&sql)
+            .await
+            .map_err(|inner| Error::Database {
+                context: format!("dropping shadow schema {name}"),
+                inner,
+            })?;
+    }
+    client
+        .batch_execute("DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public")
+        .await
+        .map_err(|inner| Error::Database {
+            context: "resetting the public schema".to_owned(),
+            inner,
+        })
 }
 
 /// Applies SQL text to a fresh catalog.
