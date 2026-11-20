@@ -6,6 +6,26 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] — milestone 2
+
+### Added
+
+- Model, parser, diff and planner coverage for enum (including `ADD VALUE`),
+  composite, domain and range types, standalone sequences, plain and
+  materialized views, overloaded functions/procedures, triggers, RLS
+  policies, partitioned tables, comments and grants.
+- Full catalog dependency graph: views depending on a changed column are
+  dropped before `ALTER COLUMN ... TYPE` and recreated afterwards.
+- Known-valid and known-invalid vector tests for every new object kind; 30
+  new snapshot/convergence cases (75 total).
+- Parser normalisation rules and official PostgreSQL documentation citations
+  in `docs/parser.md`.
+
+### Fixed
+
+- Dropping a table with a self-referencing foreign key no longer reports a
+  dependency error (PostgreSQL drops the constraint with the table).
+
 ## [0.1.0] — milestone 1
 
 ### Added

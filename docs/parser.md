@@ -142,14 +142,73 @@ in `crates/pgdelta-core/src/naming.rs` with `REL_18_STABLE` GitHub URLs.
 
 ## Deliberate milestone-1 limits
 
-These are absent from the model and **rejected with a source-located error**
-when encountered, rather than silently ignored: partitioned tables,
+These were absent from the milestone-1 model and **rejected with a
+source-located error** rather than silently ignored: partitioned tables,
 views/materialized views, functions/procedures, triggers, policies/RLS,
-grants, comments, publication membership, exclusion constraints, enum/
-composite/domain/range types, standalone sequences, column storage settings
-and generated-column expression rewriting on rename. Extension `VERSION` and
-`CASCADE` clauses parse but are not modelled (version state is managed with
-`ALTER EXTENSION UPDATE`, outside milestone 1).
+grants, comments, enum/composite/domain/range types and standalone
+sequences. Extension `VERSION` and `CASCADE` clauses parse but are not
+modelled (version state is managed with `ALTER EXTENSION UPDATE`).
 
 Renames are never guessed: a rename diffs as a drop plus a create until the
 opt-in `--rename` hints from the SPEC are implemented in a later milestone.
+
+## Milestone 2: extended object coverage
+
+Milestone 2 adds the object kinds above to the same normalised catalog, so
+all three sources (SQL file, SQL directory, live database) continue to
+compare equal. The following official PostgreSQL 18 pages were fetched with
+web tools and are cited from the relevant modules:
+
+* `CREATE TYPE` — <https://www.postgresql.org/docs/18/sql-createtype.html>
+* `ALTER TYPE` — <https://www.postgresql.org/docs/18/sql-altertype.html>
+* `CREATE DOMAIN` — <https://www.postgresql.org/docs/18/sql-createdomain.html>
+* `CREATE SEQUENCE` — <https://www.postgresql.org/docs/18/sql-createsequence.html>
+* `CREATE VIEW` — <https://www.postgresql.org/docs/18/sql-createview.html>
+* `CREATE MATERIALIZED VIEW` — <https://www.postgresql.org/docs/18/sql-creatematerializedview.html>
+* `CREATE FUNCTION` (overloads, pseudo-types) — <https://www.postgresql.org/docs/18/sql-createfunction.html>
+* `CREATE TRIGGER` — <https://www.postgresql.org/docs/18/sql-createtrigger.html>
+* `CREATE POLICY` — <https://www.postgresql.org/docs/18/sql-createpolicy.html>
+* `COMMENT` — <https://www.postgresql.org/docs/18/sql-comment.html>
+* `GRANT`/`REVOKE` — <https://www.postgresql.org/docs/18/sql-grant.html>
+* partitioning — <https://www.postgresql.org/docs/18/sql-createtable.html>,
+  <https://www.postgresql.org/docs/18/ddl-partitioning.html>
+
+### Normalisation rules implemented
+
+* **Types.** Enum labels keep their sort order; `ADD VALUE` appends or
+  inserts `BEFORE`/`AFTER` a neighbour, `RENAME VALUE` keeps the position.
+  Only appends and in-place renames are planned as `ALTER TYPE`; removals or
+  reordering drop and recreate the type. Composite attributes are ordered;
+  domain `CHECK`/`NOT NULL` constraints carry generated names; range types
+  keep all `SUBTYPE`-family options. All named type properties are part of
+  the model identity.
+* **Sequences.** Options are fully normalised with the documented defaults,
+  including negative increments (descending `MINVALUE` = type minimum,
+  `MAXVALUE` = -1, `START` = maxvalue). `OWNED BY` is a first-class field.
+* **Views.** The defining query and output columns are stored verbatim. A
+  view that reads a table whose column type changes is dropped **before**
+  the `ALTER COLUMN ... TYPE` and recreated **after** it, because a view's
+  stored target list caches the column type.
+* **Routines.** Identity is `(schema, name, input signature)`; OUT
+  parameters are ignored exactly as in PostgreSQL's overload resolution.
+  `CREATE OR REPLACE` updates a body without dropping dependants; a changed
+  signature drops and recreates.
+* **Triggers/policies.** Constraint triggers must be `AFTER ... FOR EACH
+  ROW` and `INSTEAD OF` triggers must be `FOR EACH ROW`; `INSERT` policies
+  cannot carry `USING` and `SELECT`/`DELETE` policies cannot carry `WITH
+  CHECK` (CREATE POLICY docs). These rules are validated at apply time.
+* **Comments/grants.** `''` and `NULL` both remove a comment. Privileges are
+  accumulated per `(object, grantee)`; `REVOKE` removes only the named
+  privileges, and an empty grant disappears from the model.
+* **Partitioning.** A parent stores `PARTITION BY`; children store their
+  bound and parent link. `ATTACH PARTITION` validates that an existing
+  table's columns match the parent's; `CREATE TABLE ... PARTITION OF`
+  materialises the child.
+
+### Still out of scope (explicitly rejected)
+
+Publication membership, exclusion constraints, column storage settings,
+base/shell types, role membership grants, `GRANT ... ALL ... IN SCHEMA`,
+column-level grants, transition relations in triggers, extension ownership,
+and generated-expression rewriting on rename. Unsupported forms are
+rejected with a source-located error rather than silently dropped.

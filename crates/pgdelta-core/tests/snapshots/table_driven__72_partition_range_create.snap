@@ -1,0 +1,22 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <72_partition_range_create/from.sql>
+-- to:   <72_partition_range_create/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE TABLE "public"."measurements" (
+    "city" text,
+    "logged_at" date,
+    "value" numeric
+) PARTITION BY RANGE ("logged_at");
+
+CREATE TABLE "public"."measurements_2024" PARTITION OF "public"."measurements" FOR VALUES FROM('2024-01-01') TO('2025-01-01');
+
+COMMIT;

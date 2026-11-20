@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <54_domain_default_change/from.sql>
+-- to:   <54_domain_default_change/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+DROP TYPE "public"."priority";
+
+CREATE DOMAIN "public"."priority" AS integer DEFAULT 5;
+
+COMMIT;

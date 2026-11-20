@@ -124,6 +124,46 @@ pub struct PlanSummary {
 
 /// Ranks (broad phases) for the dependency sort.
 mod rank {
+    /// `DROP VIEW` of a view depending on a changing/dropped relation.
+    pub(crate) const DROP_VIEW: u32 = 5;
+    /// `DROP TRIGGER`.
+    pub(crate) const DROP_TRIGGER: u32 = 6;
+    /// `DROP POLICY`.
+    pub(crate) const DROP_POLICY: u32 = 7;
+    /// `REVOKE`.
+    pub(crate) const DROP_GRANT: u32 = 8;
+    /// `COMMENT ... IS NULL`.
+    pub(crate) const DROP_COMMENT: u32 = 9;
+    /// `DROP PARTITION`.
+    pub(crate) const DROP_PARTITION: u32 = 10;
+    /// `DROP FUNCTION`/`DROP PROCEDURE`.
+    pub(crate) const DROP_ROUTINE: u32 = 35;
+    /// `DROP TYPE`/`DROP DOMAIN`.
+    pub(crate) const DROP_TYPE: u32 = 36;
+    /// `DROP SEQUENCE`.
+    pub(crate) const DROP_SEQUENCE: u32 = 37;
+    /// `CREATE TYPE`/`CREATE DOMAIN`.
+    pub(crate) const CREATE_TYPE: u32 = 105;
+    /// `CREATE SEQUENCE`.
+    pub(crate) const CREATE_SEQUENCE: u32 = 106;
+    /// `ALTER TYPE ... ADD VALUE` / `RENAME VALUE`.
+    pub(crate) const ALTER_TYPE: u32 = 115;
+    /// `ALTER SEQUENCE`.
+    pub(crate) const ALTER_SEQUENCE: u32 = 116;
+    /// `CREATE FUNCTION`/`CREATE PROCEDURE`.
+    pub(crate) const CREATE_ROUTINE: u32 = 125;
+    /// `CREATE VIEW`/`CREATE MATERIALIZED VIEW` (after altering tables).
+    pub(crate) const CREATE_VIEW: u32 = 140;
+    /// `CREATE TRIGGER`.
+    pub(crate) const CREATE_TRIGGER: u32 = 172;
+    /// `CREATE POLICY` / RLS flags.
+    pub(crate) const CREATE_POLICY: u32 = 174;
+    /// `CREATE TABLE ... PARTITION OF` / `ATTACH PARTITION`.
+    pub(crate) const CREATE_PARTITION: u32 = 176;
+    /// `COMMENT ON`.
+    pub(crate) const SET_COMMENT: u32 = 180;
+    /// `GRANT`.
+    pub(crate) const SET_GRANT: u32 = 182;
     /// `ALTER TABLE ... DROP CONSTRAINT` on surviving tables.
     pub(crate) const DROP_CONSTRAINT: u32 = 10;
     /// `ALTER TABLE ... DROP COLUMN`.
@@ -187,13 +227,31 @@ pub fn plan(from: &Catalog, to: &Catalog, from_desc: &str, to_desc: &str) -> Res
                 ));
             }
             Change::DropTable { schema, name } => {
-                nodes.push(node(
-                    rank::DROP_TABLE,
-                    format!("drop-table:{schema}.{name}"),
-                    "drop",
-                    qualified(schema, name),
-                    format!("DROP TABLE {};", qualified(schema, name)),
-                ));
+                // Views reading this table must disappear first: PostgreSQL
+                // refuses DROP TABLE while a view depends on it (RESTRICT).
+                let mut after = Vec::new();
+                for (view_schema, view_name) in from.views.keys() {
+                    if view_schema == schema {
+                        // Cheap conservative edge: any view in the same
+                        // schema is dropped before the table; only views
+                        // that actually read it are emitted by the diff.
+                        let key = format!("drop-view:{view_schema}.{view_name}");
+                        if changes.iter().any(|c| matches!(c, Change::DropView { schema: s, name: n, .. } if s == view_schema && n == view_name)) {
+                            after.push(key);
+                        }
+                    }
+                }
+                nodes.push(PlanNode {
+                    rank: rank::DROP_TABLE,
+                    key: format!("drop-table:{schema}.{name}"),
+                    payload: PlanStatement {
+                        sql: format!("DROP TABLE {};", qualified(schema, name)),
+                        action: "drop",
+                        object: qualified(schema, name),
+                        transactional: true,
+                    },
+                    after,
+                });
             }
             Change::DropIndex { schema, name } => {
                 nodes.push(node(
@@ -202,6 +260,157 @@ pub fn plan(from: &Catalog, to: &Catalog, from_desc: &str, to_desc: &str) -> Res
                     "drop",
                     qualified(schema, name),
                     format!("DROP INDEX {};", qualified(schema, name)),
+                ));
+            }
+            Change::DropView {
+                schema,
+                name,
+                materialized,
+            } => {
+                let object = qualified(schema, name);
+                nodes.push(node(
+                    rank::DROP_VIEW,
+                    format!("drop-view:{schema}.{name}"),
+                    "drop",
+                    object.clone(),
+                    format!(
+                        "DROP {} {};",
+                        if *materialized {
+                            "MATERIALIZED VIEW"
+                        } else {
+                            "VIEW"
+                        },
+                        object
+                    ),
+                ));
+            }
+            Change::DropTrigger {
+                schema,
+                table,
+                name,
+            } => {
+                nodes.push(node(
+                    rank::DROP_TRIGGER,
+                    format!("drop-trigger:{schema}.{table}.{name}"),
+                    "drop",
+                    format!("{table}.{name}"),
+                    format!(
+                        "DROP TRIGGER {} ON {};",
+                        quote_ident(name),
+                        qualified(schema, table)
+                    ),
+                ));
+            }
+            Change::DropPolicy {
+                schema,
+                table,
+                name,
+            } => {
+                nodes.push(node(
+                    rank::DROP_POLICY,
+                    format!("drop-policy:{schema}.{table}.{name}"),
+                    "drop",
+                    format!("{table}.{name}"),
+                    format!(
+                        "DROP POLICY {} ON {};",
+                        quote_ident(name),
+                        qualified(schema, table)
+                    ),
+                ));
+            }
+            Change::DropType { schema, name } => {
+                nodes.push(node(
+                    rank::DROP_TYPE,
+                    format!("drop-type:{schema}.{name}"),
+                    "drop",
+                    qualified(schema, name),
+                    format!("DROP TYPE {};", qualified(schema, name)),
+                ));
+            }
+            Change::DropSequence { schema, name } => {
+                nodes.push(node(
+                    rank::DROP_SEQUENCE,
+                    format!("drop-sequence:{schema}.{name}"),
+                    "drop",
+                    qualified(schema, name),
+                    format!("DROP SEQUENCE {};", qualified(schema, name)),
+                ));
+            }
+            Change::DropRoutine {
+                schema,
+                name,
+                signature,
+                kind,
+            } => {
+                nodes.push(node(
+                    rank::DROP_ROUTINE,
+                    format!("drop-routine:{schema}.{name}.{signature}"),
+                    "drop",
+                    qualified(schema, name),
+                    format!(
+                        "DROP {} {}({});",
+                        kind.as_sql(),
+                        qualified(schema, name),
+                        signature
+                    ),
+                ));
+            }
+            Change::DropPartition { schema, name } => {
+                nodes.push(node(
+                    rank::DROP_PARTITION,
+                    format!("drop-partition:{schema}.{name}"),
+                    "drop",
+                    qualified(schema, name),
+                    format!("DROP TABLE {};", qualified(schema, name)),
+                ));
+            }
+            Change::DropComment { object } => {
+                nodes.push(node(
+                    rank::DROP_COMMENT,
+                    format!("drop-comment:{}:{}", object.kind.as_sql(), object.name),
+                    "drop",
+                    object.name.clone(),
+                    format!("COMMENT ON {} IS NULL;", object.render()),
+                ));
+            }
+            Change::DropGrant {
+                object,
+                grantee,
+                privileges,
+            } => {
+                let list = privileges.iter().cloned().collect::<Vec<_>>().join(", ");
+                nodes.push(node(
+                    rank::DROP_GRANT,
+                    format!(
+                        "revoke:{}:{}:{}",
+                        object.kind.as_sql(),
+                        object.name,
+                        grantee
+                    ),
+                    "drop",
+                    object.name.clone(),
+                    format!(
+                        "REVOKE {list} ON {} FROM {};",
+                        object.render(),
+                        quote_ident(grantee)
+                    ),
+                ));
+            }
+            Change::ReplaceType { pg_type } => {
+                let key = format!("replace-type:{}:{}", pg_type.schema, pg_type.name);
+                nodes.push(node(
+                    rank::DROP_TYPE,
+                    format!("{key}:drop"),
+                    "drop",
+                    qualified(&pg_type.schema, &pg_type.name),
+                    format!("DROP TYPE {};", qualified(&pg_type.schema, &pg_type.name)),
+                ));
+                nodes.push(node(
+                    rank::CREATE_TYPE,
+                    format!("{key}:create"),
+                    "create",
+                    qualified(&pg_type.schema, &pg_type.name),
+                    render_create_type(pg_type),
                 ));
             }
             Change::AlterTable {
@@ -356,6 +565,257 @@ pub fn plan(from: &Catalog, to: &Catalog, from_desc: &str, to_desc: &str) -> Res
                     },
                     after: Vec::new(),
                 });
+            }
+            Change::CreateType { pg_type } => {
+                nodes.push(node(
+                    rank::CREATE_TYPE,
+                    format!("create-type:{}:{}", pg_type.schema, pg_type.name),
+                    "create",
+                    qualified(&pg_type.schema, &pg_type.name),
+                    render_create_type(pg_type),
+                ));
+            }
+            Change::AlterEnum {
+                schema,
+                name,
+                append,
+                renames,
+            } => {
+                let object = qualified(schema, name);
+                for (position, value) in append.iter().enumerate() {
+                    nodes.push(node(
+                        rank::ALTER_TYPE,
+                        format!("enum-add:{schema}:{name}:{position}"),
+                        "alter",
+                        object.clone(),
+                        format!(
+                            "ALTER TYPE {object} ADD VALUE {};",
+                            crate::sql::expr::render_string_literal(value)
+                        ),
+                    ));
+                }
+                for (from, to) in renames {
+                    nodes.push(node(
+                        rank::ALTER_TYPE,
+                        format!("enum-rename:{schema}:{name}:{from}"),
+                        "alter",
+                        object.clone(),
+                        format!(
+                            "ALTER TYPE {object} RENAME VALUE {} TO {};",
+                            crate::sql::expr::render_string_literal(from),
+                            crate::sql::expr::render_string_literal(to)
+                        ),
+                    ));
+                }
+            }
+            Change::UpsertSequence { sequence, create } => {
+                let sql = if *create {
+                    render_create_sequence(sequence)
+                } else {
+                    render_alter_sequence(sequence)
+                };
+                nodes.push(node(
+                    if *create {
+                        rank::CREATE_SEQUENCE
+                    } else {
+                        rank::ALTER_SEQUENCE
+                    },
+                    format!("sequence:{}:{}", sequence.schema, sequence.name),
+                    if *create { "create" } else { "alter" },
+                    qualified(&sequence.schema, &sequence.name),
+                    sql,
+                ));
+            }
+            Change::CreateView { view } => {
+                let object = qualified(&view.schema, &view.name);
+                // A view depends on every table it reads: when those tables
+                // are created in the same plan, the view follows them.
+                let mut after = Vec::new();
+                for (schema, table) in view.referenced_relations() {
+                    let key = format!("create-table:{schema}.{table}");
+                    if nodes.iter().any(|n| n.key == key) {
+                        after.push(key);
+                    }
+                }
+                nodes.push(PlanNode {
+                    rank: rank::CREATE_VIEW,
+                    key: format!("create-view:{}:{}", view.schema, view.name),
+                    payload: PlanStatement {
+                        sql: render_create_view(view),
+                        action: "create",
+                        object: object.clone(),
+                        transactional: true,
+                    },
+                    after,
+                });
+            }
+            Change::UpsertRoutine { routine, create } => {
+                nodes.push(node(
+                    rank::CREATE_ROUTINE,
+                    format!(
+                        "routine:{}:{}:{}",
+                        routine.schema,
+                        routine.name,
+                        routine.signature()
+                    ),
+                    if *create { "create" } else { "alter" },
+                    format!("{}.{}", routine.name, routine.signature()),
+                    render_create_routine(routine),
+                ));
+            }
+            Change::CreateTrigger { trigger } => {
+                let key = format!(
+                    "create-trigger:{}:{}:{}",
+                    trigger.schema, trigger.table, trigger.name
+                );
+                nodes.push(node(
+                    rank::CREATE_TRIGGER,
+                    key.clone(),
+                    "create",
+                    format!("{}.{}", trigger.table, trigger.name),
+                    render_create_trigger(trigger),
+                ));
+                if !trigger.enabled {
+                    nodes.push(node(
+                        rank::CREATE_TRIGGER + 1,
+                        format!("{key}:disable"),
+                        "alter",
+                        format!("{}.{}", trigger.table, trigger.name),
+                        format!(
+                            "ALTER TRIGGER {} ON {} DISABLE;",
+                            quote_ident(&trigger.name),
+                            qualified(&trigger.schema, &trigger.table)
+                        ),
+                    ));
+                }
+            }
+            Change::CreatePolicy { policy } => {
+                nodes.push(node(
+                    rank::CREATE_POLICY,
+                    format!(
+                        "create-policy:{}:{}:{}",
+                        policy.schema, policy.table, policy.name
+                    ),
+                    "create",
+                    format!("{}.{}", policy.table, policy.name),
+                    render_create_policy(policy),
+                ));
+            }
+            Change::SetTableRls {
+                schema,
+                table,
+                enabled,
+                forced,
+            } => {
+                let object = qualified(schema, table);
+                let mut statements = Vec::new();
+                if *enabled {
+                    statements.push(format!("ALTER TABLE {object} ENABLE ROW LEVEL SECURITY;"));
+                } else {
+                    statements.push(format!("ALTER TABLE {object} DISABLE ROW LEVEL SECURITY;"));
+                }
+                if *forced {
+                    statements.push(format!("ALTER TABLE {object} FORCE ROW LEVEL SECURITY;"));
+                } else {
+                    statements.push(format!("ALTER TABLE {object} NO FORCE ROW LEVEL SECURITY;"));
+                }
+                for (i, sql) in statements.into_iter().enumerate() {
+                    nodes.push(node(
+                        rank::CREATE_POLICY,
+                        format!("rls:{schema}:{table}:{i}"),
+                        "alter",
+                        object.clone(),
+                        sql,
+                    ));
+                }
+            }
+            Change::SetComment { object, text } => {
+                nodes.push(node(
+                    rank::SET_COMMENT,
+                    format!("comment:{}:{}", object.kind.as_sql(), object.name),
+                    "create",
+                    object.name.clone(),
+                    format!(
+                        "COMMENT ON {} IS {};",
+                        object.render(),
+                        crate::sql::expr::render_string_literal(text)
+                    ),
+                ));
+            }
+            Change::SetGrant { grant } => {
+                let list = grant
+                    .privileges
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let option = if grant.with_grant_option {
+                    " WITH GRANT OPTION"
+                } else {
+                    ""
+                };
+                nodes.push(node(
+                    rank::SET_GRANT,
+                    format!(
+                        "grant:{}:{}:{}",
+                        grant.object.kind.as_sql(),
+                        grant.object.name,
+                        grant.grantee
+                    ),
+                    "create",
+                    grant.object.name.clone(),
+                    format!(
+                        "GRANT {list} ON {} TO {}{option};",
+                        grant.object.render(),
+                        quote_ident(&grant.grantee)
+                    ),
+                ));
+            }
+            Change::SetPartitioning {
+                schema,
+                table,
+                partition,
+            } => {
+                let object = qualified(schema, table);
+                let sql = match partition {
+                    Some(partition) => {
+                        format!("ALTER TABLE {object} {}", render_partition_by(partition))
+                    }
+                    None => format!("ALTER TABLE {object} REMOVE PARTITIONING;"),
+                };
+                nodes.push(node(
+                    rank::ALTER,
+                    format!("partitioning:{schema}:{table}"),
+                    "alter",
+                    object,
+                    sql,
+                ));
+            }
+            Change::CreatePartition { partition } => {
+                let object = qualified(&partition.schema, &partition.name);
+                let parent = qualified(&partition.parent_schema, &partition.parent_table);
+                let bound = if partition.is_default {
+                    "DEFAULT".to_owned()
+                } else {
+                    format!("FOR VALUES {}", partition.bound)
+                };
+                let sql = if from
+                    .tables
+                    .contains_key(&(partition.schema.clone(), partition.name.clone()))
+                {
+                    // The table already exists as a standalone table: use
+                    // ATTACH PARTITION rather than trying to create it again.
+                    format!("ALTER TABLE {parent} ATTACH PARTITION {object} {bound};")
+                } else {
+                    format!("CREATE TABLE {object} PARTITION OF {parent} {bound};")
+                };
+                nodes.push(node(
+                    rank::CREATE_PARTITION,
+                    format!("create-partition:{}:{}", partition.schema, partition.name),
+                    "create",
+                    object.clone(),
+                    sql,
+                ));
             }
             _ => {}
         }
@@ -655,11 +1115,17 @@ fn render_create_table(table: &Table) -> String {
             ));
         }
     }
-    format!(
-        "CREATE TABLE {} (\n{}\n);",
+    let mut out = format!(
+        "CREATE TABLE {} (\n{}\n)",
         qualified(&table.schema, &table.name),
         lines.join(",\n")
-    )
+    );
+    if let Some(partition) = &table.partition {
+        out.push(' ');
+        out.push_str(render_partition_by(partition).trim_end_matches(';'));
+    }
+    out.push(';');
+    out
 }
 
 /// Renders a column definition: name, type, then the canonical option
@@ -869,7 +1335,7 @@ fn render_ident_list(idents: &[String]) -> String {
 
 /// Renders a canonical type string. Builtins are display-ready;
 /// qualified custom names quote each part.
-fn render_type(canonical: &str) -> String {
+pub(crate) fn render_type(canonical: &str) -> String {
     if !canonical.contains('.') {
         return canonical.to_owned();
     }
@@ -878,10 +1344,7 @@ fn render_type(canonical: &str) -> String {
 
 /// Renders a dotted name with every part quoted.
 fn quote_parts(name: &str) -> String {
-    name.split('.')
-        .map(quote_ident)
-        .collect::<Vec<_>>()
-        .join(".")
+    crate::naming::quote_parts(name)
 }
 
 /// Renders a collation name (parts quoted individually).
@@ -901,7 +1364,7 @@ pub fn render_sql(plan: &Plan) -> String {
         return String::new();
     }
     let mut out = String::new();
-    out.push_str("-- pgdelta 0.1.0 migration\n");
+    out.push_str("-- pgdelta 0.2.0 migration\n");
     out.push_str(&format!("-- from: {}\n", plan.from_desc));
     out.push_str(&format!("-- to:   {}\n", plan.to_desc));
     out.push_str("--\n");
@@ -968,4 +1431,328 @@ pub fn render_json(plan: &Plan) -> Result<Value> {
         "summary": plan.summary(),
         "sections": sections,
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Rendering helpers for milestone-2 object kinds.
+// ---------------------------------------------------------------------------
+
+/// Renders `CREATE TYPE` / `CREATE DOMAIN`.
+fn render_create_type(pg_type: &crate::model::PgType) -> String {
+    use crate::model::PgTypeKind;
+    let name = qualified(&pg_type.schema, &pg_type.name);
+    match &pg_type.kind {
+        PgTypeKind::Enum { values } => {
+            let labels = values
+                .iter()
+                .map(|v| crate::sql::expr::render_string_literal(v))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("CREATE TYPE {name} AS ENUM ({labels});")
+        }
+        PgTypeKind::Composite { attributes } => {
+            let attrs = attributes
+                .iter()
+                .map(|a| {
+                    let mut out = format!("{} {}", quote_ident(&a.name), render_type(&a.data_type));
+                    if let Some(collation) = &a.collation {
+                        out.push_str(&format!(" COLLATE {}", render_collation(collation)));
+                    }
+                    out
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("CREATE TYPE {name} AS ({attrs});")
+        }
+        PgTypeKind::Domain {
+            base_type,
+            collation,
+            default,
+            constraints,
+        } => {
+            let mut out = format!("CREATE DOMAIN {name} AS {}", render_type(base_type));
+            if let Some(collation) = collation {
+                out.push_str(&format!(" COLLATE {}", render_collation(collation)));
+            }
+            if let Some(default) = default {
+                out.push_str(&format!(" DEFAULT {default}"));
+            }
+            for constraint in constraints {
+                out.push_str(" CONSTRAINT ");
+                out.push_str(&quote_ident(&constraint.name));
+                match &constraint.kind {
+                    crate::model::DomainConstraintKind::NotNull => out.push_str(" NOT NULL"),
+                    crate::model::DomainConstraintKind::Check { expr } => {
+                        out.push_str(&format!(" CHECK ({expr})"));
+                    }
+                }
+            }
+            out.push(';');
+            out
+        }
+        PgTypeKind::Range {
+            subtype,
+            subtype_opclass,
+            collation,
+            canonical,
+            subtype_diff,
+            multirange_type_name,
+        } => {
+            let mut options = vec![format!("SUBTYPE = {}", render_type(subtype))];
+            if let Some(v) = subtype_opclass {
+                options.push(format!("SUBTYPE_OPCLASS = {v}"));
+            }
+            if let Some(v) = collation {
+                options.push(format!("COLLATION = {v}"));
+            }
+            if let Some(v) = canonical {
+                options.push(format!("CANONICAL = {v}"));
+            }
+            if let Some(v) = subtype_diff {
+                options.push(format!("SUBTYPE_DIFF = {v}"));
+            }
+            if let Some(v) = multirange_type_name {
+                options.push(format!("MULTIRANGE_TYPE_NAME = {v}"));
+            }
+            format!("CREATE TYPE {name} AS RANGE ({});", options.join(", "))
+        }
+    }
+}
+
+/// Renders `CREATE SEQUENCE` with all normalised options.
+fn render_create_sequence(sequence: &crate::model::Sequence) -> String {
+    let mut out = format!(
+        "CREATE SEQUENCE {}",
+        qualified(&sequence.schema, &sequence.name)
+    );
+    out.push_str(&render_sequence_options(sequence));
+    out.push(';');
+    out
+}
+
+/// Renders `ALTER SEQUENCE ...` with all normalised options.
+fn render_alter_sequence(sequence: &crate::model::Sequence) -> String {
+    let mut out = format!(
+        "ALTER SEQUENCE {}",
+        qualified(&sequence.schema, &sequence.name)
+    );
+    out.push_str(&render_sequence_options(sequence));
+    out.push(';');
+    out
+}
+
+fn render_sequence_options(sequence: &crate::model::Sequence) -> String {
+    let o = &sequence.options;
+    let mut out = format!(
+        " AS {} INCREMENT BY {} MINVALUE {} MAXVALUE {} START WITH {} CACHE {} {}",
+        sequence.data_type,
+        o.increment,
+        o.minvalue,
+        o.maxvalue,
+        o.start,
+        o.cache,
+        if o.cycle { "CYCLE" } else { "NO CYCLE" }
+    );
+    match &sequence.owned_by {
+        Some(owner) => out.push_str(&format!(
+            " OWNED BY {}.{}",
+            qualified(&owner.schema, &owner.table),
+            quote_ident(&owner.column)
+        )),
+        None => out.push_str(" OWNED BY NONE"),
+    }
+    out
+}
+
+/// Renders `CREATE [MATERIALIZED] VIEW`.
+fn render_create_view(view: &crate::model::View) -> String {
+    use crate::model::CheckOption;
+    let name = qualified(&view.schema, &view.name);
+    let mut out = String::new();
+    if view.materialized {
+        out.push_str("CREATE MATERIALIZED VIEW ");
+    } else {
+        out.push_str("CREATE VIEW ");
+    }
+    out.push_str(&name);
+    if !view.columns.is_empty() {
+        out.push_str(&format!(" ({})", render_ident_list(&view.columns)));
+    }
+    if view.materialized
+        && let Some(method) = &view.access_method
+    {
+        out.push_str(&format!(" USING {}", quote_ident(method)));
+    }
+    if !view.options.is_empty() {
+        let options = view
+            .options
+            .iter()
+            .map(|(k, v)| format!("{} = {}", quote_ident(&k.to_ascii_lowercase()), v))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(" WITH ({options})"));
+    }
+    if let Some(tablespace) = &view.tablespace {
+        out.push_str(&format!(" TABLESPACE {}", quote_ident(tablespace)));
+    }
+    out.push_str(&format!(" AS {}", view.query));
+    if !view.materialized {
+        match view.check_option {
+            CheckOption::None => {}
+            CheckOption::Local => out.push_str(" WITH LOCAL CHECK OPTION"),
+            CheckOption::Cascaded => out.push_str(" WITH CASCADED CHECK OPTION"),
+        }
+    } else if !view.with_data {
+        out.push_str(" WITH NO DATA");
+    }
+    out.push(';');
+    out
+}
+
+/// Renders `CREATE [OR REPLACE] FUNCTION|PROCEDURE`.
+fn render_create_routine(routine: &crate::model::Routine) -> String {
+    let mut out = format!(
+        "CREATE OR REPLACE {} {} ({})",
+        routine.kind.as_sql(),
+        routine.qualified_name(),
+        routine.render_args()
+    );
+    if !routine.return_table.is_empty() {
+        let cols = routine
+            .return_table
+            .iter()
+            .map(|(name, data_type)| format!("{} {}", quote_ident(name), render_type(data_type)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        out.push_str(&format!(" RETURNS TABLE ({cols})"));
+    } else if let Some(return_type) = &routine.return_type {
+        out.push_str(&format!(
+            " RETURNS {}{}",
+            if routine.returns_setof { "SETOF " } else { "" },
+            render_type(return_type)
+        ));
+    }
+    out.push_str(&format!(" LANGUAGE {}", quote_ident(&routine.language)));
+    if routine.volatility != crate::model::Volatility::Volatile {
+        out.push(' ');
+        out.push_str(routine.volatility.as_sql());
+    }
+    if routine.strict {
+        out.push_str(" STRICT");
+    }
+    if routine.leakproof {
+        out.push_str(" LEAKPROOF");
+    }
+    if routine.window {
+        out.push_str(" WINDOW");
+    }
+    if routine.security == crate::model::Security::Definer {
+        out.push_str(" SECURITY DEFINER");
+    }
+    if let Some(parallel) = &routine.parallel {
+        out.push_str(&format!(" PARALLEL {parallel}"));
+    }
+    if let Some(cost) = routine.cost {
+        out.push_str(&format!(" COST {cost}"));
+    }
+    if let Some(rows) = routine.rows {
+        out.push_str(&format!(" ROWS {rows}"));
+    }
+    for (name, value) in &routine.settings {
+        out.push_str(&format!(" SET {name} = {value}"));
+    }
+    out.push_str(&format!(" AS {}", routine.body));
+    out.push(';');
+    out
+}
+
+/// Renders `CREATE TRIGGER`.
+fn render_create_trigger(trigger: &crate::model::Trigger) -> String {
+    let mut out = String::from("CREATE ");
+    if trigger.constraint {
+        out.push_str("CONSTRAINT ");
+    }
+    out.push_str(&format!(
+        "TRIGGER {} {} ",
+        quote_ident(&trigger.name),
+        trigger.timing.as_sql()
+    ));
+    out.push_str(
+        &trigger
+            .events
+            .iter()
+            .map(crate::model::TriggerEvent::as_sql)
+            .collect::<Vec<_>>()
+            .join(" OR "),
+    );
+    out.push_str(&format!(
+        " ON {} ",
+        qualified(&trigger.schema, &trigger.table)
+    ));
+    if let Some(deferrable) = &trigger.deferrable {
+        out.push_str(if deferrable.initially_deferred {
+            "DEFERRABLE INITIALLY DEFERRED "
+        } else {
+            "DEFERRABLE INITIALLY IMMEDIATE "
+        });
+    }
+    out.push_str(match trigger.level {
+        crate::model::TriggerLevel::Row => "FOR EACH ROW ",
+        crate::model::TriggerLevel::Statement => "FOR EACH STATEMENT ",
+    });
+    if let Some(condition) = &trigger.condition {
+        out.push_str(&format!("WHEN ({condition}) "));
+    }
+    out.push_str(&format!(
+        "EXECUTE FUNCTION {}({})",
+        qualified(&trigger.function.0, &trigger.function.1),
+        trigger
+            .function_args
+            .iter()
+            .map(|a| crate::sql::expr::render_string_literal(a))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ));
+    out.push(';');
+    out
+}
+
+/// Renders `CREATE POLICY`.
+fn render_create_policy(policy: &crate::model::Policy) -> String {
+    let mut out = format!(
+        "CREATE POLICY {} ON {}",
+        quote_ident(&policy.name),
+        qualified(&policy.schema, &policy.table)
+    );
+    if !policy.permissive {
+        out.push_str(" AS RESTRICTIVE");
+    }
+    if policy.command != crate::model::PolicyCommand::All {
+        out.push_str(&format!(" FOR {}", policy.command.as_sql()));
+    }
+    if policy.roles != ["PUBLIC"] {
+        out.push_str(&format!(" TO {}", policy.roles.join(", ")));
+    }
+    if let Some(using) = &policy.using {
+        out.push_str(&format!(" USING ({using})"));
+    }
+    if let Some(check) = &policy.check {
+        out.push_str(&format!(" WITH CHECK ({check})"));
+    }
+    out.push(';');
+    out
+}
+
+/// Renders `PARTITION BY ...`.
+fn render_partition_by(partition: &crate::model::Partitioning) -> String {
+    let keys = partition
+        .keys
+        .iter()
+        .map(|key| match key {
+            crate::model::PartitionKey::Column(column) => quote_ident(column),
+            crate::model::PartitionKey::Expression(expr) => format!("({expr})"),
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("PARTITION BY {} ({keys});", partition.strategy.as_sql())
 }

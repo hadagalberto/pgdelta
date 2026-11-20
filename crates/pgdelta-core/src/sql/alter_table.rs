@@ -222,6 +222,57 @@ pub(crate) fn parse_alter_table(
     cursor.eat_word("*");
     truncate_parts(&mut name);
 
+    // Partitioning and row-level-security statements share the ALTER TABLE
+    // prefix but change object-level state, so they are handled before the
+    // per-column action loop.
+    if let Some(stmt) =
+        super::objects::parse_alter_partition_action(source, index, cursor, &name, text)?
+    {
+        return Ok(stmt);
+    }
+    if cursor.eat_words2("ENABLE", "ROW") {
+        if !cursor.eat_words2("LEVEL", "SECURITY") {
+            return Err(Error::parse(source, index, "expected LEVEL SECURITY", text));
+        }
+        return Ok(ParsedStatement::AlterTableRls {
+            table: name,
+            enabled: Some(true),
+            forced: None,
+        });
+    }
+    if cursor.eat_words2("DISABLE", "ROW") {
+        if !cursor.eat_words2("LEVEL", "SECURITY") {
+            return Err(Error::parse(source, index, "expected LEVEL SECURITY", text));
+        }
+        return Ok(ParsedStatement::AlterTableRls {
+            table: name,
+            enabled: Some(false),
+            forced: None,
+        });
+    }
+    let force = if cursor.eat_word("FORCE") {
+        Some(true)
+    } else if cursor.eat_words2("NO", "FORCE") {
+        Some(false)
+    } else {
+        None
+    };
+    if force.is_some() {
+        if !cursor.eat_words2("ROW", "LEVEL") || !cursor.eat_word("SECURITY") {
+            return Err(Error::parse(
+                source,
+                index,
+                "expected ROW LEVEL SECURITY",
+                text,
+            ));
+        }
+        return Ok(ParsedStatement::AlterTableRls {
+            table: name,
+            enabled: None,
+            forced: force,
+        });
+    }
+
     let mut actions = Vec::new();
     loop {
         actions.push(parse_action(source, index, cursor, text)?);

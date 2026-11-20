@@ -1,6 +1,7 @@
 //! Tables, columns, generated columns and identity columns.
 
 use super::constraint::Constraint;
+use super::partition::Partitioning;
 use serde::Serialize;
 
 /// A table.
@@ -23,6 +24,14 @@ pub struct Table {
     /// unnamed constraints receive PostgreSQL's auto-generated names, see
     /// `naming.rs`).
     pub constraints: Vec<Constraint>,
+    /// `PARTITION BY` clause when this is a partitioned table.
+    pub partition: Option<Partitioning>,
+    /// Parent of this table when it is a partition.
+    pub partition_of: Option<(String, String)>,
+    /// `ENABLE ROW LEVEL SECURITY` (PostgreSQL docs, `CREATE POLICY`).
+    pub rls_enabled: bool,
+    /// `FORCE ROW LEVEL SECURITY`, which applies RLS even to the owner.
+    pub rls_forced: bool,
 }
 
 impl Table {

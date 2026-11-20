@@ -14,7 +14,9 @@ pub mod datatype;
 pub mod expr;
 pub mod index;
 pub mod misc;
+pub mod objects;
 pub mod tokens;
+pub mod types;
 
 use crate::error::{Error, Result};
 use crate::model::{Deferrable, FkAction, FkMatch, IdentityKind, SequenceOptions};
@@ -142,6 +144,191 @@ pub(crate) enum ParsedStatement {
     /// `START TRANSACTION`, `END` — the policy is documented in
     /// `docs/parser.md`).
     SessionOp,
+
+    // ---- Milestone 2 object kinds -------------------------------------
+    /// `CREATE TYPE` / `CREATE DOMAIN` (a domain is a [`PgType`] variant).
+    CreateType {
+        /// The new type, ready for the catalog.
+        pg_type: crate::model::PgType,
+    },
+    /// `DROP TYPE` / `DROP DOMAIN`.
+    DropType {
+        /// Names to drop.
+        names: Vec<Vec<String>>,
+        /// `IF EXISTS`.
+        if_exists: bool,
+    },
+    /// `ALTER TYPE` / `ALTER DOMAIN`.
+    AlterType {
+        /// Target type name.
+        name: Vec<String>,
+        /// Actions in statement order.
+        actions: Vec<types::TypeAction>,
+        /// Whether the target is a domain.
+        domain: bool,
+    },
+    /// `CREATE SEQUENCE`.
+    CreateSequence {
+        /// The new sequence, ready for the catalog.
+        sequence: crate::model::Sequence,
+    },
+    /// `ALTER SEQUENCE`.
+    AlterSequence {
+        /// Target sequence name.
+        name: Vec<String>,
+        /// Actions in statement order.
+        actions: Vec<objects::SequenceAction>,
+    },
+    /// `DROP SEQUENCE`.
+    DropSequence {
+        /// Names to drop.
+        names: Vec<Vec<String>>,
+        /// `IF EXISTS`.
+        if_exists: bool,
+    },
+    /// `CREATE VIEW` / `CREATE MATERIALIZED VIEW`.
+    CreateView {
+        /// The new view, ready for the catalog.
+        view: crate::model::View,
+        /// `CREATE OR REPLACE` / no-op when the view already exists.
+        or_replace: bool,
+    },
+    /// `DROP VIEW` / `DROP MATERIALIZED VIEW`.
+    DropView {
+        /// Names to drop.
+        names: Vec<Vec<String>>,
+        /// `IF EXISTS`.
+        if_exists: bool,
+        /// Materialized rather than plain.
+        materialized: bool,
+    },
+    /// `ALTER VIEW` / `ALTER MATERIALIZED VIEW`.
+    AlterView {
+        /// Target view name.
+        name: Vec<String>,
+        /// Actions in statement order.
+        actions: Vec<objects::ViewAction>,
+    },
+    /// `CREATE FUNCTION` / `CREATE PROCEDURE`.
+    CreateRoutine {
+        /// The new routine, ready for the catalog.
+        routine: crate::model::Routine,
+        /// `CREATE OR REPLACE`.
+        or_replace: bool,
+    },
+    /// `DROP FUNCTION` / `DROP PROCEDURE`.
+    DropRoutine {
+        /// Signature references: `(name parts, input types)`.
+        names: Vec<(Vec<String>, Vec<String>)>,
+        /// `IF EXISTS`.
+        if_exists: bool,
+    },
+    /// `ALTER FUNCTION` / `ALTER PROCEDURE`.
+    AlterRoutine {
+        /// Signature reference: `(name parts, input types)`.
+        name: (Vec<String>, Vec<String>),
+        /// Actions in statement order.
+        actions: Vec<objects::RoutineAction>,
+    },
+    /// `CREATE TRIGGER`.
+    CreateTrigger {
+        /// The new trigger, ready for the catalog.
+        trigger: crate::model::Trigger,
+        /// `CREATE OR REPLACE`.
+        or_replace: bool,
+    },
+    /// `DROP TRIGGER`.
+    DropTrigger {
+        /// Trigger name.
+        name: String,
+        /// Owning table name parts.
+        table: Vec<String>,
+        /// `IF EXISTS`.
+        if_exists: bool,
+    },
+    /// `ALTER TRIGGER`.
+    AlterTrigger {
+        /// Trigger name.
+        name: String,
+        /// Owning table name parts.
+        table: Vec<String>,
+        /// New name when renaming, otherwise `None`.
+        rename_to: Option<String>,
+        /// `ENABLE` / `DISABLE` / `ENABLE ALWAYS` / `ENABLE REPLICA`.
+        enabled: Option<objects::TriggerEnabled>,
+    },
+    /// `CREATE POLICY`.
+    CreatePolicy {
+        /// The new policy, ready for the catalog.
+        policy: crate::model::Policy,
+    },
+    /// `DROP POLICY`.
+    DropPolicy {
+        /// Policy name.
+        name: String,
+        /// Owning table name parts.
+        table: Vec<String>,
+        /// `IF EXISTS`.
+        if_exists: bool,
+    },
+    /// `ALTER POLICY`.
+    AlterPolicy {
+        /// Policy name.
+        name: String,
+        /// Owning table name parts.
+        table: Vec<String>,
+        /// `RENAME TO` target, if given.
+        rename_to: Option<String>,
+        /// Replacement roles (`TO ...`), if given.
+        roles: Option<Vec<String>>,
+        /// Replacement `USING` expression, if given.
+        using: Option<String>,
+        /// Replacement `WITH CHECK` expression, if given.
+        check: Option<String>,
+    },
+    /// `ALTER TABLE ... ENABLE/DISABLE/FORCE ROW LEVEL SECURITY`.
+    AlterTableRls {
+        /// Table name parts.
+        table: Vec<String>,
+        /// `ENABLE` (true) or `DISABLE` (false), when given.
+        enabled: Option<bool>,
+        /// `FORCE` (true) or `NO FORCE` (false), when given.
+        forced: Option<bool>,
+    },
+    /// `COMMENT ON ... IS { 'text' | NULL }`.
+    Comment {
+        /// Canonical object reference.
+        object: crate::model::ObjectRef,
+        /// Comment text; `None` removes the comment.
+        text: Option<String>,
+    },
+    /// `GRANT` / `REVOKE` on catalog objects.
+    Grant {
+        /// Grants, one per object/privilege-set.
+        grants: Vec<crate::model::Grant>,
+        /// `REVOKE` rather than `GRANT`.
+        revoke: bool,
+    },
+    /// `ALTER TABLE ... PARTITION BY` (or `REMOVE PARTITIONING`).
+    SetPartitioning {
+        /// Table name parts.
+        table: Vec<String>,
+        /// New partitioning, `None` for `REMOVE PARTITIONING`.
+        partition: Option<crate::model::Partitioning>,
+    },
+    /// `ALTER TABLE ... ATTACH/DETACH PARTITION`.
+    AttachPartition {
+        /// Parent table name parts.
+        table: Vec<String>,
+        /// Partition name parts.
+        partition: Vec<String>,
+        /// Bound clause text, empty for `DEFAULT`.
+        bound: String,
+        /// `DEFAULT` partition.
+        is_default: bool,
+        /// `DETACH` rather than `ATTACH`.
+        detach: bool,
+    },
 }
 
 /// A parsed table body.
@@ -151,6 +338,8 @@ pub(crate) struct RawTable {
     pub columns: Vec<RawColumn>,
     /// Table constraints, in declaration order.
     pub constraints: Vec<RawConstraint>,
+    /// `PARTITION BY` clause, when the table is partitioned.
+    pub partition: Option<crate::model::Partitioning>,
 }
 
 /// A parsed column definition.
@@ -315,6 +504,9 @@ fn parse_statement(source: &str, index: usize, stmt: &StatementTokens) -> Result
         "SHOW" => Ok(ParsedStatement::SessionOp),
         "BEGIN" => Ok(ParsedStatement::SessionOp),
         "END" => Ok(ParsedStatement::SessionOp),
+        "COMMENT" => objects::parse_comment(source, index, &mut cursor, &text),
+        "GRANT" => objects::parse_grant(source, index, &mut cursor, false, &text),
+        "REVOKE" => objects::parse_grant(source, index, &mut cursor, true, &text),
         "ROLLBACK" => Err(Error::unsupported(
             source,
             index,
@@ -337,20 +529,34 @@ fn parse_create_dispatch(
     cursor: &mut Cursor,
     text: &str,
 ) -> Result<ParsedStatement> {
-    let second = match cursor.peek_nth(0) {
-        Some(sqlparser::tokenizer::Token::Word(w)) => w.value.to_ascii_uppercase(),
-        _ => String::new(),
+    use sqlparser::tokenizer::Token;
+    let word_at = |n: usize| -> String {
+        match cursor.peek_nth(n) {
+            Some(Token::Word(w)) => w.value.to_ascii_uppercase(),
+            _ => String::new(),
+        }
     };
-    let third = match cursor.peek_nth(1) {
-        Some(sqlparser::tokenizer::Token::Word(w)) => w.value.to_ascii_uppercase(),
-        _ => String::new(),
-    };
-    match (second.as_str(), third.as_str()) {
-        ("INDEX", _) | ("UNIQUE", "INDEX") => {
+    let (second, third, fourth) = (word_at(0), word_at(1), word_at(2));
+    match (second.as_str(), third.as_str(), fourth.as_str()) {
+        ("INDEX", _, _) | ("UNIQUE", "INDEX", _) => {
             index::parse_create_index(source, index, cursor, text)
         }
-        ("SCHEMA", _) => misc::parse_create_schema(source, index, cursor, text),
-        ("EXTENSION", _) => misc::parse_create_extension(source, index, cursor, text),
+        ("SCHEMA", _, _) => misc::parse_create_schema(source, index, cursor, text),
+        ("EXTENSION", _, _) => misc::parse_create_extension(source, index, cursor, text),
+        ("TYPE", _, _) => types::parse_create_type(source, index, cursor, text),
+        ("DOMAIN", _, _) => types::parse_create_domain(source, index, cursor, text),
+        ("SEQUENCE", _, _) => objects::parse_create_sequence(source, index, cursor, text),
+        ("MATERIALIZED", "VIEW", _) => objects::parse_create_matview(source, index, cursor, text),
+        ("VIEW", _, _) | ("RECURSIVE", "VIEW", _) | ("OR", "REPLACE", "VIEW") => {
+            objects::parse_create_view(source, index, cursor, text)
+        }
+        ("FUNCTION" | "PROCEDURE", _, _) | ("OR", "REPLACE", "FUNCTION" | "PROCEDURE") => {
+            objects::parse_create_routine(source, index, cursor, text)
+        }
+        ("TRIGGER", _, _) | ("CONSTRAINT", "TRIGGER", _) => {
+            objects::parse_create_trigger(source, index, cursor, text)
+        }
+        ("POLICY", _, _) => objects::parse_create_policy(source, index, cursor, text),
         _ => create_table::parse_create(source, index, cursor, text),
     }
 }
@@ -378,10 +584,17 @@ fn parse_drop(
         "EXTENSION" => misc::parse_drop_extension(source, index, cursor, text),
         "TABLE" => misc::parse_drop_table(source, index, cursor, text),
         "INDEX" => index::parse_drop_index(source, index, cursor, text),
+        "TYPE" | "DOMAIN" => types::parse_drop_type(source, index, cursor, text),
+        "SEQUENCE" => objects::parse_drop_sequence(source, index, cursor, text),
+        "VIEW" => objects::parse_drop_view(source, index, cursor, false, text),
+        "MATERIALIZED" => objects::parse_drop_view(source, index, cursor, true, text),
+        "FUNCTION" | "PROCEDURE" => objects::parse_drop_routine(source, index, cursor, text),
+        "TRIGGER" => objects::parse_drop_trigger(source, index, cursor, text),
+        "POLICY" => objects::parse_drop_policy(source, index, cursor, text),
         other => Err(Error::unsupported(
             source,
             index,
-            format!("DROP {other} is not supported by pgdelta's catalog model in milestone 1"),
+            format!("DROP {other} is not supported by pgdelta's catalog model"),
             text,
         )),
     }
@@ -408,10 +621,18 @@ fn parse_alter(
     match object_name.as_str() {
         "TABLE" => alter_table::parse_alter_table(source, index, cursor, text),
         "INDEX" => index::parse_alter_index(source, index, cursor, text),
+        "TYPE" => types::parse_alter_type(source, index, cursor, false, text),
+        "DOMAIN" => types::parse_alter_type(source, index, cursor, true, text),
+        "SEQUENCE" => objects::parse_alter_sequence(source, index, cursor, text),
+        "VIEW" => objects::parse_alter_view(source, index, cursor, false, text),
+        "MATERIALIZED" => objects::parse_alter_view(source, index, cursor, true, text),
+        "FUNCTION" | "PROCEDURE" => objects::parse_alter_routine(source, index, cursor, text),
+        "TRIGGER" => objects::parse_alter_trigger(source, index, cursor, text),
+        "POLICY" => objects::parse_alter_policy(source, index, cursor, text),
         other => Err(Error::unsupported(
             source,
             index,
-            format!("ALTER {other} is not supported by pgdelta's catalog model in milestone 1"),
+            format!("ALTER {other} is not supported by pgdelta's catalog model"),
             text,
         )),
     }
@@ -669,6 +890,82 @@ fn parse_one_fk_action(
 
 fn parse_optional_fk_columns(cursor: &mut Cursor) -> Vec<String> {
     cursor.parse_ident_list_paren().unwrap_or_default()
+}
+
+/// Captures a canonical data type from the cursor until one of `boundary`
+/// words, a top-level comma or a closing paren, then normalises it through
+/// the `CREATE TABLE` lift in `datatype.rs`.
+pub(crate) fn take_type(
+    source: &str,
+    index: usize,
+    cursor: &mut Cursor,
+    boundary: &[&str],
+    text: &str,
+) -> Result<String> {
+    let raw = cursor.capture_until_words(boundary);
+    if raw.trim().is_empty() {
+        return Err(Error::parse(source, index, "expected a data type", text));
+    }
+    datatype::normalize_type_text(&raw)
+        .map_err(|e| Error::parse(source, index, format!("invalid data type: {e}"), text))
+}
+
+/// Parses `[(name = value | name value), ...]`, consuming the parentheses.
+/// Values that are keywords or contain spaces are captured until a comma or
+/// closing paren, so `SET search_path = admin, pg_temp` style lists need
+/// their own parser and are not misread here.
+pub(crate) fn take_option_pairs(cursor: &mut Cursor) -> Option<Vec<(String, String)>> {
+    if !cursor.eat_lparen() {
+        return None;
+    }
+    let mut out = Vec::new();
+    loop {
+        let name = cursor.parse_ident()?;
+        cursor.eat_equals();
+        let value = cursor.capture_until_words(&[]);
+        let value = value.trim().trim_start_matches('=').trim().to_owned();
+        out.push((name.to_ascii_uppercase(), value));
+        if cursor.eat_comma() {
+            continue;
+        }
+        if cursor.eat_rparen() {
+            break;
+        }
+        return None;
+    }
+    Some(out)
+}
+
+/// A parsed `IS { 'text' | NULL }` literal.
+#[derive(Debug, Clone)]
+pub(crate) enum ParsedLiteral {
+    /// A single-quoted string.
+    Text(String),
+    /// The `NULL` keyword (which removes the comment).
+    Null,
+}
+
+/// Parses a single-quoted literal or the `NULL` keyword.
+pub(crate) fn take_literal_or_null(cursor: &mut Cursor) -> Option<ParsedLiteral> {
+    if cursor.eat_word("NULL") {
+        return Some(ParsedLiteral::Null);
+    }
+    tokens::eat_string_literal(cursor).map(ParsedLiteral::Text)
+}
+
+/// Truncates every part of a parsed object name to PostgreSQL's 63 bytes.
+pub(crate) fn truncate_parts(parts: &mut [String]) {
+    for part in parts.iter_mut() {
+        *part = crate::naming::truncate_ident(part);
+    }
+}
+
+/// Resolves a parsed name to `(schema, name)` with `public` as default.
+pub(crate) fn resolve_name(parts: &[String]) -> (String, String) {
+    match parts.len() {
+        1 => (crate::model::PUBLIC_SCHEMA.to_owned(), parts[0].clone()),
+        _ => (parts[0].clone(), parts[parts.len() - 1].clone()),
+    }
 }
 
 /// Renders sequence options for `GENERATED ... AS IDENTITY (...)`.

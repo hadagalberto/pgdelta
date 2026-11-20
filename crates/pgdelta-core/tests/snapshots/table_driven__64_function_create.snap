@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <64_function_create/from.sql>
+-- to:   <64_function_create/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE OR REPLACE FUNCTION "public"."add_one" ("a" integer) RETURNS integer LANGUAGE "sql" IMMUTABLE STRICT AS $$ SELECT a + 1; $$;
+
+COMMIT;

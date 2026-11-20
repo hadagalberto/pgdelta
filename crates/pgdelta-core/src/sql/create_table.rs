@@ -112,13 +112,7 @@ pub(crate) fn parse_create(
         return Err(Error::parse(source, index, "expected a table name", text));
     };
     if cursor.at_word("PARTITION") {
-        return Err(Error::unsupported(
-            source,
-            index,
-            "partitioned tables and partitions are not modelled in milestone 1 (they arrive \
-             with the partitioning milestone; see docs/parser.md)",
-            text,
-        ));
+        return super::objects::parse_create_partition(source, index, cursor, name, text);
     }
     if cursor.at_word("OF") {
         return Err(Error::unsupported(
@@ -156,14 +150,19 @@ pub(crate) fn parse_create(
         }
     }
 
-    // Anything after the closing paren (INHERITS/PARTITION BY/USING/WITH/...)
-    // is out of milestone-1 scope.
+    // `PARTITION BY` is part of the table's definition; other trailing
+    // options (INHERITS, USING, WITH, ...) configure unmodelled state.
+    if cursor.at_word("PARTITION") {
+        raw.partition = Some(super::objects::parse_partition_by(
+            source, index, cursor, text,
+        )?);
+    }
     if !cursor.is_empty() {
         let tail = join_tokens(&cursor.tokens()[cursor.pos()..]);
         return Err(Error::unsupported(
             source,
             index,
-            format!("table options after the column list are not modelled in milestone 1: {tail}"),
+            format!("unsupported table options after the column list: {tail}"),
             text,
         ));
     }

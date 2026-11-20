@@ -146,4 +146,47 @@ pub fn assert_equivalent(actual: &Catalog, expected: &Catalog, context: &str) {
         actual_indexes, expected_indexes,
         "{context}: indexes diverge"
     );
+
+    // Milestone-2 object collections are compared as ordered-by-key vectors
+    // so that HashMap-style iteration never makes a snapshot flaky.
+    assert_eq!(
+        actual.types.iter().collect::<Vec<_>>(),
+        expected.types.iter().collect::<Vec<_>>(),
+        "{context}: types diverge"
+    );
+    assert_eq!(
+        actual.sequences.iter().collect::<Vec<_>>(),
+        expected.sequences.iter().collect::<Vec<_>>(),
+        "{context}: sequences diverge"
+    );
+    assert_eq!(
+        actual.views.iter().collect::<Vec<_>>(),
+        expected.views.iter().collect::<Vec<_>>(),
+        "{context}: views diverge"
+    );
+    assert_eq!(
+        actual.routines.iter().collect::<Vec<_>>(),
+        expected.routines.iter().collect::<Vec<_>>(),
+        "{context}: routines diverge"
+    );
+    assert_eq!(
+        actual.triggers.iter().collect::<Vec<_>>(),
+        expected.triggers.iter().collect::<Vec<_>>(),
+        "{context}: triggers diverge"
+    );
+    assert_eq!(
+        actual.policies.iter().collect::<Vec<_>>(),
+        expected.policies.iter().collect::<Vec<_>>(),
+        "{context}: policies diverge"
+    );
+    assert_eq!(
+        actual.partitions.iter().collect::<Vec<_>>(),
+        expected.partitions.iter().collect::<Vec<_>>(),
+        "{context}: partitions diverge"
+    );
+    assert_eq!(
+        actual.comments, expected.comments,
+        "{context}: comments diverge"
+    );
+    assert_eq!(actual.grants, expected.grants, "{context}: grants diverge");
 }

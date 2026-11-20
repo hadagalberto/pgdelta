@@ -1,0 +1,20 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <70_rls_enable_policy/from.sql>
+-- to:   <70_rls_enable_policy/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE POLICY "owner_read" ON "public"."documents" FOR SELECT USING ("owner" = "current_user"());
+
+ALTER TABLE "public"."documents" ENABLE ROW LEVEL SECURITY;
+
+ALTER TABLE "public"."documents" NO FORCE ROW LEVEL SECURITY;
+
+COMMIT;

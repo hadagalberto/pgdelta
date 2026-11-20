@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <71_policy_change/from.sql>
+-- to:   <71_policy_change/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+DROP POLICY "owner_read" ON "public"."documents";
+
+CREATE POLICY "owner_read" ON "public"."documents" FOR SELECT USING ("owner" = "session_user"());
+
+COMMIT;

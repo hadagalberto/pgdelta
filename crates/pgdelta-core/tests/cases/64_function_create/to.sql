@@ -1,0 +1,2 @@
+CREATE FUNCTION add_one(a integer) RETURNS integer LANGUAGE SQL IMMUTABLE STRICT AS $$ SELECT a + 1; $$;
+

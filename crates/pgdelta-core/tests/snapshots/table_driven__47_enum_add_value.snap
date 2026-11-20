@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <47_enum_add_value/from.sql>
+-- to:   <47_enum_add_value/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TYPE "public"."mood" ADD VALUE 'happy';
+
+ALTER TYPE "public"."mood" ADD VALUE 'great';
+
+COMMIT;

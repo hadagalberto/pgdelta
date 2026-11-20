@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <53_domain_add_constraint/from.sql>
+-- to:   <53_domain_add_constraint/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+DROP TYPE "public"."posint";
+
+CREATE DOMAIN "public"."posint" AS integer CONSTRAINT "posint_check" CHECK ("value" > 0) CONSTRAINT "posint_not_null" NOT NULL;
+
+COMMIT;

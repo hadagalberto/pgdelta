@@ -6,7 +6,15 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::index::Index;
+use super::objects::{Grant, ObjectRef};
+use super::partition::Partition;
+use super::policy::Policy;
+use super::routine::Routine;
+use super::sequence::Sequence;
 use super::table::Table;
+use super::trigger::Trigger;
+use super::types::PgType;
+use super::view::View;
 
 /// The schema that exists in every database and is never created or dropped.
 pub const PUBLIC_SCHEMA: &str = "public";
@@ -27,7 +35,7 @@ pub struct Schema {
 /// The model records the extension name and its optional `WITH SCHEMA`
 /// target. `VERSION` and `CASCADE` clauses are accepted by the parser but
 /// not modelled: version state is managed with `ALTER EXTENSION UPDATE`,
-/// which is out of scope for milestone 1 (see `docs/parser.md`).
+/// which is out of scope (see `docs/parser.md`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Extension {
     /// Extension name.
@@ -38,7 +46,8 @@ pub struct Extension {
 
 /// The normalised in-memory catalog model shared by all sources.
 ///
-/// Lookups are keyed by `(schema, name)` pairs; iteration order follows the
+/// Lookups are keyed by `(schema, name)` pairs (routines, triggers and
+/// policies add a third disambiguating key); iteration order follows the
 /// `BTreeMap` ordering, which keeps every downstream output (plans, JSON
 /// dumps, snapshots) deterministic.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -52,6 +61,25 @@ pub struct Catalog {
     pub tables: BTreeMap<(String, String), Table>,
     /// Standalone indexes, keyed by `(schema, index)`.
     pub indexes: BTreeMap<(String, String), Index>,
+    /// User-defined types (enum, composite, domain, range).
+    pub types: BTreeMap<(String, String), PgType>,
+    /// Standalone sequences.
+    pub sequences: BTreeMap<(String, String), Sequence>,
+    /// Views and materialized views.
+    pub views: BTreeMap<(String, String), View>,
+    /// Functions/procedures, keyed by `(schema, name, input signature)`.
+    pub routines: BTreeMap<(String, String, String), Routine>,
+    /// Triggers, keyed by `(table schema, table, trigger name)`.
+    pub triggers: BTreeMap<(String, String, String), Trigger>,
+    /// RLS policies, keyed by `(table schema, table, policy name)`.
+    pub policies: BTreeMap<(String, String, String), Policy>,
+    /// Partitions, keyed by `(schema, partition name)`.
+    pub partitions: BTreeMap<(String, String), Partition>,
+    /// Comments, keyed by canonical object reference. Empty comments are
+    /// never stored (PostgreSQL treats `''` and `NULL` as removal).
+    pub comments: BTreeMap<ObjectRef, String>,
+    /// Privilege grants, keyed by `(object, grantee)`.
+    pub grants: BTreeMap<(ObjectRef, String), Grant>,
 }
 
 impl Catalog {
@@ -86,21 +114,23 @@ impl Catalog {
         self.indexes.get(&(schema.to_owned(), name.to_owned()))
     }
 
-    /// Returns every relation name (table or index) currently in `schema`.
+    /// Returns every relation name (table, index, view, sequence or
+    /// partition) currently in `schema`. PostgreSQL keeps all of these in
+    /// the `pg_class` namespace, so they collide with each other.
     #[must_use]
     pub fn relation_names(&self, schema: &str) -> Vec<String> {
         let mut names: Vec<String> = self
             .tables
             .keys()
+            .chain(self.indexes.keys())
+            .chain(self.views.keys())
+            .chain(self.sequences.keys())
+            .chain(self.partitions.keys())
             .filter(|(s, _)| s == schema)
             .map(|(_, n)| n.clone())
             .collect();
-        names.extend(
-            self.indexes
-                .keys()
-                .filter(|(s, _)| s == schema)
-                .map(|(_, n)| n.clone()),
-        );
+        names.sort();
+        names.dedup();
         names
     }
 
@@ -120,23 +150,20 @@ impl Catalog {
     /// `pgdelta inspect`).
     #[must_use]
     pub fn to_json(&self) -> Value {
-        fn schemas(c: &Catalog) -> Value {
-            serde_json::json!(c.schemas.values().map(|s| &s.name).collect::<Vec<_>>())
-        }
-        fn extensions(c: &Catalog) -> Value {
-            serde_json::json!(c.extensions.values().collect::<Vec<_>>())
-        }
-        fn tables(c: &Catalog) -> Value {
-            serde_json::json!(c.tables.values().collect::<Vec<_>>())
-        }
-        fn indexes(c: &Catalog) -> Value {
-            serde_json::json!(c.indexes.values().collect::<Vec<_>>())
-        }
         serde_json::json!({
-            "schemas": schemas(self),
-            "extensions": extensions(self),
-            "tables": tables(self),
-            "indexes": indexes(self),
+            "schemas": self.schemas.values().map(|s| &s.name).collect::<Vec<_>>(),
+            "extensions": self.extensions.values().collect::<Vec<_>>(),
+            "tables": self.tables.values().collect::<Vec<_>>(),
+            "indexes": self.indexes.values().collect::<Vec<_>>(),
+            "types": self.types.values().collect::<Vec<_>>(),
+            "sequences": self.sequences.values().collect::<Vec<_>>(),
+            "views": self.views.values().collect::<Vec<_>>(),
+            "routines": self.routines.values().collect::<Vec<_>>(),
+            "triggers": self.triggers.values().collect::<Vec<_>>(),
+            "policies": self.policies.values().collect::<Vec<_>>(),
+            "partitions": self.partitions.values().collect::<Vec<_>>(),
+            "comments": self.comments.iter().collect::<Vec<_>>(),
+            "grants": self.grants.values().collect::<Vec<_>>(),
         })
     }
 }

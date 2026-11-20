@@ -1,0 +1,20 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <63_view_type_change_recreate/from.sql>
+-- to:   <63_view_type_change_recreate/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+DROP VIEW "public"."event_view";
+
+ALTER TABLE "public"."events" ALTER COLUMN "payload" TYPE character varying(80);
+
+CREATE VIEW "public"."event_view" AS SELECT id, payload FROM events;
+
+COMMIT;

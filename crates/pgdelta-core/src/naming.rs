@@ -246,3 +246,12 @@ pub fn truncate_ident(name: &str) -> String {
 pub fn qualified(schema: &str, name: &str) -> String {
     format!("{}.{}", quote_ident(schema), quote_ident(name))
 }
+
+/// Renders a dotted name with every part quoted.
+#[must_use]
+pub fn quote_parts(name: &str) -> String {
+    name.split('.')
+        .map(quote_ident)
+        .collect::<Vec<_>>()
+        .join(".")
+}

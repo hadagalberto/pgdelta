@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <67_procedure_create/from.sql>
+-- to:   <67_procedure_create/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE OR REPLACE PROCEDURE "public"."reset_counter" () LANGUAGE "sql" AS $$ UPDATE counters SET value = 0; $$;
+
+COMMIT;

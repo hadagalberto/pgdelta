@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <65_function_overloads/from.sql>
+-- to:   <65_function_overloads/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE OR REPLACE FUNCTION "public"."area" ("w" double precision, "h" double precision) RETURNS double precision LANGUAGE "sql" IMMUTABLE AS $$ SELECT w * h; $$;
+
+COMMIT;

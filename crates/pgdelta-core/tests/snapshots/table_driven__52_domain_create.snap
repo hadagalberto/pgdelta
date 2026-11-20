@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <52_domain_create/from.sql>
+-- to:   <52_domain_create/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE DOMAIN "public"."email" AS text CONSTRAINT "email_check" CHECK ("value" ~ '^[^@]+@[^@]+$');
+
+COMMIT;

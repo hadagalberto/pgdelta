@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <74_comment_table_column/from.sql>
+-- to:   <74_comment_table_column/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+COMMENT ON COLUMN "customers"."email" IS 'Contact address';
+
+COMMENT ON TABLE "public"."customers" IS 'Customer master data';
+
+COMMIT;

@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <51_composite_alter_attributes/from.sql>
+-- to:   <51_composite_alter_attributes/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+DROP TYPE "public"."address";
+
+CREATE TYPE "public"."address" AS ("street" character varying(80), "zipcode" text, "city" text);
+
+COMMIT;

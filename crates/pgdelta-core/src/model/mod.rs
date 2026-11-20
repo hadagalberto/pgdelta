@@ -20,10 +20,26 @@
 pub mod catalog;
 pub mod constraint;
 pub mod index;
+pub mod objects;
+pub mod partition;
+pub mod policy;
+pub mod routine;
+pub mod sequence;
 pub mod table;
+pub mod trigger;
+pub mod types;
+pub mod view;
 
 pub use catalog::{Catalog, Extension, PUBLIC_SCHEMA, Schema};
 pub use constraint::{Constraint, ConstraintKind, Deferrable, FkAction, FkMatch};
 pub use index::{Index, IndexElem, IndexElemKind, NullsOrder, SortOrder};
+pub use objects::{Grant, ObjectKind, ObjectRef, routine_ref_name};
+pub use partition::{Partition, PartitionKey, PartitionStrategy, Partitioning};
+pub use policy::{Policy, PolicyCommand};
+pub use routine::{ArgMode, Routine, RoutineArg, RoutineKind, Security, Volatility};
+pub use sequence::{Sequence, SequenceOwner};
 pub(crate) use table::sequence_type_range;
 pub use table::{Column, Generated, Identity, IdentityKind, SequenceOptions, Table};
+pub use trigger::{Trigger, TriggerEvent, TriggerLevel, TriggerTiming};
+pub use types::{CompositeAttribute, DomainConstraint, DomainConstraintKind, PgType, PgTypeKind};
+pub use view::{CheckOption, View};

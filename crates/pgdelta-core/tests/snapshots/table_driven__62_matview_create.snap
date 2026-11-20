@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <62_matview_create/from.sql>
+-- to:   <62_matview_create/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE MATERIALIZED VIEW "public"."sales_totals" AS SELECT count(*) AS n, sum(amount) AS total FROM sales WITH NO DATA;
+
+COMMIT;

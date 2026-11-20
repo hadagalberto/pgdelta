@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <75_grant_revoke/from.sql>
+-- to:   <75_grant_revoke/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+REVOKE INSERT ON TABLE "public"."reports" FROM "analysts";
+
+GRANT SELECT ON TABLE "public"."reports" TO "analysts";
+
+COMMIT;

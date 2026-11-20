@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <60_view_change/from.sql>
+-- to:   <60_view_change/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+DROP VIEW "public"."engineering";
+
+CREATE VIEW "public"."engineering" AS SELECT id, name, dept FROM employees WHERE dept = 'eng';
+
+COMMIT;

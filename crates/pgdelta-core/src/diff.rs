@@ -10,8 +10,10 @@
 //! without a destructive rewrite, so pgdelta never plans a reorder.
 
 use crate::model::{
-    Catalog, Column, Constraint, ConstraintKind, Deferrable, Extension, Index, PUBLIC_SCHEMA, Table,
+    Catalog, Column, Constraint, ConstraintKind, Deferrable, Extension, Index, PUBLIC_SCHEMA,
+    PgTypeKind, Table,
 };
+use std::collections::BTreeSet;
 
 /// One modelled difference between two catalogs.
 #[derive(Debug, Clone)]
@@ -68,6 +70,167 @@ pub(crate) enum Change {
         schema: String,
         /// Index name.
         name: String,
+    },
+    // ---- Milestone 2 object changes ------------------------------------
+    /// A user-defined type exists only in the target.
+    CreateType {
+        /// The new type.
+        pg_type: crate::model::PgType,
+    },
+    /// A user-defined type exists only in the source.
+    DropType {
+        /// Schema name.
+        schema: String,
+        /// Type name.
+        name: String,
+    },
+    /// An enum gained values at the end (or had values renamed in place).
+    AlterEnum {
+        /// Schema name.
+        schema: String,
+        /// Type name.
+        name: String,
+        /// Values appended in target order.
+        append: Vec<String>,
+        /// `(old, new)` renames at unchanged positions.
+        renames: Vec<(String, String)>,
+    },
+    /// A type changed in a way that requires drop + recreate.
+    ReplaceType {
+        /// The replacement type.
+        pg_type: crate::model::PgType,
+    },
+    /// A standalone sequence was created or differs and must be altered.
+    UpsertSequence {
+        /// The desired sequence state.
+        sequence: crate::model::Sequence,
+        /// Whether the sequence is new.
+        create: bool,
+    },
+    /// A standalone sequence exists only in the source.
+    DropSequence {
+        /// Schema name.
+        schema: String,
+        /// Sequence name.
+        name: String,
+    },
+    /// A view/materialized view exists only in the target.
+    CreateView {
+        /// The new view.
+        view: crate::model::View,
+    },
+    /// A view/materialized view must be dropped (and possibly recreated).
+    DropView {
+        /// Schema name.
+        schema: String,
+        /// View name.
+        name: String,
+        /// Whether it is materialized.
+        materialized: bool,
+    },
+    /// A routine was created, replaced or changed signature.
+    UpsertRoutine {
+        /// The desired routine.
+        routine: crate::model::Routine,
+        /// Whether a `CREATE` (rather than `CREATE OR REPLACE`) is required.
+        create: bool,
+    },
+    /// A routine exists only in the source.
+    DropRoutine {
+        /// Schema name.
+        schema: String,
+        /// Routine name.
+        name: String,
+        /// Input signature.
+        signature: String,
+        /// Function or procedure.
+        kind: crate::model::RoutineKind,
+    },
+    /// A trigger was created or changed.
+    CreateTrigger {
+        /// The new trigger.
+        trigger: crate::model::Trigger,
+    },
+    /// A trigger exists only in the source or must be recreated.
+    DropTrigger {
+        /// Schema name.
+        schema: String,
+        /// Relation name.
+        table: String,
+        /// Trigger name.
+        name: String,
+    },
+    /// A policy was created or changed.
+    CreatePolicy {
+        /// The new policy.
+        policy: crate::model::Policy,
+    },
+    /// A policy exists only in the source or must be recreated.
+    DropPolicy {
+        /// Schema name.
+        schema: String,
+        /// Table name.
+        table: String,
+        /// Policy name.
+        name: String,
+    },
+    /// Table RLS flags changed.
+    SetTableRls {
+        /// Schema name.
+        schema: String,
+        /// Table name.
+        table: String,
+        /// Desired `ENABLE`/`DISABLE` state.
+        enabled: bool,
+        /// Desired `FORCE` state.
+        forced: bool,
+    },
+    /// A comment must be set.
+    SetComment {
+        /// Object reference.
+        object: crate::model::ObjectRef,
+        /// Comment text.
+        text: String,
+    },
+    /// A comment must be removed.
+    DropComment {
+        /// Object reference.
+        object: crate::model::ObjectRef,
+    },
+    /// A privilege grant must be applied.
+    SetGrant {
+        /// Desired grant.
+        grant: crate::model::Grant,
+    },
+    /// A privilege grant must be revoked.
+    DropGrant {
+        /// Object reference.
+        object: crate::model::ObjectRef,
+        /// Grantee.
+        grantee: String,
+        /// Privileges to revoke.
+        privileges: std::collections::BTreeSet<String>,
+    },
+    /// A partition was created or changed.
+    CreatePartition {
+        /// The partition.
+        partition: crate::model::Partition,
+    },
+    /// A partition exists only in the source or must be recreated.
+    DropPartition {
+        /// Schema name.
+        schema: String,
+        /// Partition name.
+        name: String,
+    },
+    /// A table became (or stopped being) partitioned.
+    SetPartitioning {
+        /// Schema name.
+        schema: String,
+        /// Table name.
+        table: String,
+        /// Desired partitioning (`None` = `REMOVE PARTITIONING`).
+        partition: Option<crate::model::Partitioning>,
     },
 }
 
@@ -224,12 +387,25 @@ pub(crate) fn diff(from: &Catalog, to: &Catalog) -> Vec<Change> {
         .cloned()
         .collect();
     for (schema, name) in &dropped_tables {
+        // A partition's table entry dies with its Partition change.
+        if from
+            .tables
+            .get(&(schema.clone(), name.clone()))
+            .is_some_and(|t| t.partition_of.is_some())
+        {
+            continue;
+        }
         changes.push(Change::DropTable {
             schema: schema.clone(),
             name: name.clone(),
         });
     }
     for table in to.tables.values() {
+        // Partitions are created by their Partition change, not as plain
+        // tables (PostgreSQL's `CREATE TABLE ... PARTITION OF`).
+        if table.partition_of.is_some() {
+            continue;
+        }
         match from.table(&table.schema, &table.name) {
             None => changes.push(Change::CreateTable {
                 table: table.clone(),
@@ -273,7 +449,353 @@ pub(crate) fn diff(from: &Catalog, to: &Catalog) -> Vec<Change> {
         });
     }
 
+    diff_objects(from, to, &mut changes);
+
     changes
+}
+
+/// Diffs the milestone-2 object collections.
+fn diff_objects(from: &Catalog, to: &Catalog, changes: &mut Vec<Change>) {
+    // Tables whose column type/collation changed. A view reading such a
+    // table caches the column's type in its stored target list, so it must
+    // be dropped and recreated around the ALTER COLUMN ... TYPE statement.
+    let mut changed_tables: BTreeSet<(String, String)> = BTreeSet::new();
+    for ((schema, name), target) in &to.tables {
+        let Some(source) = from.tables.get(&(schema.clone(), name.clone())) else {
+            continue;
+        };
+        for column in &target.columns {
+            if let Some(old) = source.column(&column.name)
+                && (old.data_type != column.data_type || old.collation != column.collation)
+            {
+                changed_tables.insert((schema.clone(), name.clone()));
+                break;
+            }
+        }
+    }
+    let recreate_views: BTreeSet<(String, String)> = from
+        .views
+        .iter()
+        .filter(|(_, view)| {
+            view.referenced_relations()
+                .iter()
+                .any(|relation| changed_tables.contains(relation))
+        })
+        .map(|(key, _)| key.clone())
+        .collect();
+
+    // ---- Types -----------------------------------------------------------
+    for (key, target) in &to.types {
+        match from.types.get(key) {
+            None => changes.push(Change::CreateType {
+                pg_type: target.clone(),
+            }),
+            Some(source) => diff_type(key, source, target, changes),
+        }
+    }
+    for key in from.types.keys() {
+        if !to.types.contains_key(key) {
+            changes.push(Change::DropType {
+                schema: key.0.clone(),
+                name: key.1.clone(),
+            });
+        }
+    }
+
+    // ---- Sequences -------------------------------------------------------
+    for (key, target) in &to.sequences {
+        match from.sequences.get(key) {
+            None => changes.push(Change::UpsertSequence {
+                sequence: target.clone(),
+                create: true,
+            }),
+            Some(source) if source != target => changes.push(Change::UpsertSequence {
+                sequence: target.clone(),
+                create: false,
+            }),
+            Some(_) => {}
+        }
+    }
+    for key in from.sequences.keys() {
+        if !to.sequences.contains_key(key) {
+            changes.push(Change::DropSequence {
+                schema: key.0.clone(),
+                name: key.1.clone(),
+            });
+        }
+    }
+
+    // ---- Views -----------------------------------------------------------
+    diff_views(from, to, &recreate_views, changes);
+
+    // ---- Routines --------------------------------------------------------
+    for (key, target) in &to.routines {
+        match from.routines.get(key) {
+            None => changes.push(Change::UpsertRoutine {
+                routine: target.clone(),
+                create: true,
+            }),
+            Some(source) if source != target => changes.push(Change::UpsertRoutine {
+                routine: target.clone(),
+                create: false,
+            }),
+            Some(_) => {}
+        }
+    }
+    for (key, source) in &from.routines {
+        if !to.routines.contains_key(key) {
+            changes.push(Change::DropRoutine {
+                schema: key.0.clone(),
+                name: key.1.clone(),
+                signature: key.2.clone(),
+                kind: source.kind,
+            });
+        }
+    }
+
+    // ---- Triggers --------------------------------------------------------
+    for (key, target) in &to.triggers {
+        match from.triggers.get(key) {
+            None => changes.push(Change::CreateTrigger {
+                trigger: target.clone(),
+            }),
+            Some(source) if source != target => {
+                changes.push(Change::DropTrigger {
+                    schema: key.0.clone(),
+                    table: key.1.clone(),
+                    name: key.2.clone(),
+                });
+                changes.push(Change::CreateTrigger {
+                    trigger: target.clone(),
+                });
+            }
+            Some(_) => {}
+        }
+    }
+    for key in from.triggers.keys() {
+        if !to.triggers.contains_key(key) {
+            changes.push(Change::DropTrigger {
+                schema: key.0.clone(),
+                table: key.1.clone(),
+                name: key.2.clone(),
+            });
+        }
+    }
+
+    // ---- Policies + RLS --------------------------------------------------
+    for (key, target) in &to.policies {
+        match from.policies.get(key) {
+            None => changes.push(Change::CreatePolicy {
+                policy: target.clone(),
+            }),
+            Some(source) if source != target => {
+                changes.push(Change::DropPolicy {
+                    schema: key.0.clone(),
+                    table: key.1.clone(),
+                    name: key.2.clone(),
+                });
+                changes.push(Change::CreatePolicy {
+                    policy: target.clone(),
+                });
+            }
+            Some(_) => {}
+        }
+    }
+    for key in from.policies.keys() {
+        if !to.policies.contains_key(key) {
+            changes.push(Change::DropPolicy {
+                schema: key.0.clone(),
+                table: key.1.clone(),
+                name: key.2.clone(),
+            });
+        }
+    }
+    for ((schema, name), target) in &to.tables {
+        if let Some(source) = from.tables.get(&(schema.clone(), name.clone()))
+            && (source.rls_enabled != target.rls_enabled || source.rls_forced != target.rls_forced)
+        {
+            changes.push(Change::SetTableRls {
+                schema: schema.clone(),
+                table: name.clone(),
+                enabled: target.rls_enabled,
+                forced: target.rls_forced,
+            });
+        }
+    }
+
+    // ---- Comments --------------------------------------------------------
+    for (object, text) in &to.comments {
+        match from.comments.get(object) {
+            Some(old) if old == text => {}
+            _ => changes.push(Change::SetComment {
+                object: object.clone(),
+                text: text.clone(),
+            }),
+        }
+    }
+    for object in from.comments.keys() {
+        if !to.comments.contains_key(object) {
+            changes.push(Change::DropComment {
+                object: object.clone(),
+            });
+        }
+    }
+
+    // ---- Grants ----------------------------------------------------------
+    for (key, target) in &to.grants {
+        match from.grants.get(key) {
+            None => changes.push(Change::SetGrant {
+                grant: target.clone(),
+            }),
+            Some(source) if source != target => {
+                let removed: std::collections::BTreeSet<String> = source
+                    .privileges
+                    .difference(&target.privileges)
+                    .cloned()
+                    .collect();
+                if !removed.is_empty() {
+                    changes.push(Change::DropGrant {
+                        object: key.0.clone(),
+                        grantee: key.1.clone(),
+                        privileges: removed,
+                    });
+                }
+                changes.push(Change::SetGrant {
+                    grant: target.clone(),
+                });
+            }
+            Some(_) => {}
+        }
+    }
+    for (key, source) in &from.grants {
+        if !to.grants.contains_key(key) {
+            changes.push(Change::DropGrant {
+                object: key.0.clone(),
+                grantee: key.1.clone(),
+                privileges: source.privileges.clone(),
+            });
+        }
+    }
+
+    // ---- Partitioning ----------------------------------------------------
+    for ((schema, name), target) in &to.tables {
+        if let Some(source) = from.tables.get(&(schema.clone(), name.clone()))
+            && source.partition != target.partition
+        {
+            changes.push(Change::SetPartitioning {
+                schema: schema.clone(),
+                table: name.clone(),
+                partition: target.partition.clone(),
+            });
+        }
+    }
+    for (key, target) in &to.partitions {
+        match from.partitions.get(key) {
+            None => changes.push(Change::CreatePartition {
+                partition: target.clone(),
+            }),
+            Some(source) if source != target => {
+                changes.push(Change::DropPartition {
+                    schema: key.0.clone(),
+                    name: key.1.clone(),
+                });
+                changes.push(Change::CreatePartition {
+                    partition: target.clone(),
+                });
+            }
+            Some(_) => {}
+        }
+    }
+    for key in from.partitions.keys() {
+        if !to.partitions.contains_key(key) {
+            changes.push(Change::DropPartition {
+                schema: key.0.clone(),
+                name: key.1.clone(),
+            });
+        }
+    }
+}
+
+fn diff_type(
+    key: &(String, String),
+    source: &crate::model::PgType,
+    target: &crate::model::PgType,
+    changes: &mut Vec<Change>,
+) {
+    if source.kind == target.kind {
+        return;
+    }
+    if let (PgTypeKind::Enum { values: from }, PgTypeKind::Enum { values: to }) =
+        (&source.kind, &target.kind)
+    {
+        // Appends and in-place renames are the only ALTER-safe changes;
+        // removals/reordering require dropping the whole enum type.
+        let prefix = from.len() <= to.len() && from.iter().zip(to).all(|(a, b)| a == b);
+        if prefix {
+            changes.push(Change::AlterEnum {
+                schema: key.0.clone(),
+                name: key.1.clone(),
+                append: to[from.len()..].to_vec(),
+                renames: Vec::new(),
+            });
+            return;
+        }
+        let same_len = from.len() == to.len() && from.iter().zip(to).all(|(a, b)| a != b) && {
+            let mut unique = std::collections::BTreeSet::new();
+            to.iter().all(|v| unique.insert(v))
+        };
+        if same_len {
+            changes.push(Change::AlterEnum {
+                schema: key.0.clone(),
+                name: key.1.clone(),
+                append: Vec::new(),
+                renames: from
+                    .iter()
+                    .zip(to)
+                    .map(|(a, b)| (a.clone(), b.clone()))
+                    .collect(),
+            });
+            return;
+        }
+    }
+    changes.push(Change::ReplaceType {
+        pg_type: target.clone(),
+    });
+}
+
+fn diff_views(
+    from: &Catalog,
+    to: &Catalog,
+    recreate: &BTreeSet<(String, String)>,
+    changes: &mut Vec<Change>,
+) {
+    for (key, target) in &to.views {
+        match from.views.get(key) {
+            None => changes.push(Change::CreateView {
+                view: target.clone(),
+            }),
+            Some(source) if source != target || recreate.contains(key) => {
+                changes.push(Change::DropView {
+                    schema: key.0.clone(),
+                    name: key.1.clone(),
+                    materialized: source.materialized,
+                });
+                changes.push(Change::CreateView {
+                    view: target.clone(),
+                });
+            }
+            Some(_) => {}
+        }
+    }
+    for (key, source) in &from.views {
+        if !to.views.contains_key(key) {
+            changes.push(Change::DropView {
+                schema: key.0.clone(),
+                name: key.1.clone(),
+                materialized: source.materialized,
+            });
+        }
+    }
 }
 
 /// Diffs two versions of the same table, producing granular changes.

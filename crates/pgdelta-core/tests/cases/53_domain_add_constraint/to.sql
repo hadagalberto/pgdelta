@@ -1,0 +1,2 @@
+CREATE DOMAIN posint AS integer NOT NULL CHECK (VALUE > 0);
+

@@ -266,6 +266,10 @@ fn table_spec() -> impl Strategy<Value = Table> {
                 name,
                 columns,
                 constraints,
+                partition: None,
+                partition_of: None,
+                rls_enabled: false,
+                rls_forced: false,
             }
         })
 }

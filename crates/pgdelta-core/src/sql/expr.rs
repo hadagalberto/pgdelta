@@ -209,6 +209,16 @@ fn render_inner(expr: &Expr) -> Result<String> {
             let ty = render_cast_type(data_type)?;
             Ok(format!("CAST({inner} AS {ty})"))
         }
+        Expr::IsDistinctFrom(left, right) => {
+            let l = render_inner(left)?;
+            let r = render_inner(right)?;
+            Ok(format!("{l} is distinct from {r}"))
+        }
+        Expr::IsNotDistinctFrom(left, right) => {
+            let l = render_inner(left)?;
+            let r = render_inner(right)?;
+            Ok(format!("{l} is not distinct from {r}"))
+        }
         Expr::IsNull(inner) => {
             let s = render_inner(inner)?;
             Ok(format!("{s} is null"))
@@ -310,7 +320,8 @@ fn render_object_name(name: &sqlparser::ast::ObjectName) -> Result<String> {
 
 fn render_binary_op(op: &BinaryOperator) -> Result<&'static str> {
     use BinaryOperator::{
-        And, Divide, Eq, Gt, GtEq, Lt, LtEq, Minus, Modulo, Multiply, NotEq, Or, Plus, StringConcat,
+        And, Divide, Eq, Gt, GtEq, Lt, LtEq, Minus, Modulo, Multiply, NotEq, Or, PGRegexIMatch,
+        PGRegexMatch, PGRegexNotIMatch, PGRegexNotMatch, Plus, StringConcat,
     };
     Ok(match op {
         Plus => "+",
@@ -327,6 +338,12 @@ fn render_binary_op(op: &BinaryOperator) -> Result<&'static str> {
         And => "and",
         Or => "or",
         StringConcat => "||",
+        // PostgreSQL regular-expression operators (CREATE DOMAIN CHECK
+        // expressions commonly use `VALUE ~ 'pattern'`).
+        PGRegexMatch => "~",
+        PGRegexNotMatch => "!~",
+        PGRegexIMatch => "~*",
+        PGRegexNotIMatch => "!~*",
         other => {
             return Err(crate::Error::Serialization(format!(
                 "unsupported binary operator {other:?} in expression"

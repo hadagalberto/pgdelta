@@ -3,16 +3,19 @@
 A single-binary Rust CLI + library that diffs two PostgreSQL schemas and
 generates a safe, dependency-ordered migration script. Sources are `.sql`
 files or directories of `.sql` files ("declarative schema"); live database
-sources arrive in milestone 2.
+introspection is planned for a later milestone.
 
 MIT licensed. [Leia em português](README.pt-BR.md).
 
 ## Status
 
-Milestone 1: workspace scaffold, `clap` CLI, normalised catalog model,
-SQL-file/directory sources, diff + plan for schemas, extensions, tables,
-columns (defaults, generated, identity, collation), constraints and indexes,
-with dependency-ordered output and insta snapshot coverage.
+Milestone 2: normalised catalog model and diff/plan for schemas, extensions,
+tables, columns, constraints, indexes, user-defined types (enum, composite,
+domain, range), sequences, views/materialized views, overloaded functions and
+procedures, triggers, RLS policies, partitioned tables, comments and grants.
+Plans are dependency-ordered, drop and recreate views on referenced column
+type changes, and are covered by 75 insta snapshot/convergence cases plus
+known-valid/known-invalid and property tests.
 
 See [SPEC.md](SPEC.md) for the complete design and
 [docs/parser.md](docs/parser.md) for the parser decision and normalisation

@@ -204,6 +204,16 @@ impl<'a> Cursor<'a> {
         }
     }
 
+    /// Consumes an `=` token if present.
+    pub fn eat_equals(&mut self) -> bool {
+        if matches!(self.peek(), Some(Token::Eq)) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Consumes a `,` if present.
     pub fn eat_comma(&mut self) -> bool {
         if matches!(self.peek(), Some(Token::Comma)) {
@@ -289,6 +299,15 @@ impl<'a> Cursor<'a> {
             }
         }
         join_tokens(&self.tokens[start..self.pos])
+    }
+
+    /// Captures all remaining tokens as joined SQL text and advances to the
+    /// end. Used for function bodies, view queries and partition bounds,
+    /// whose grammars are deliberately kept verbatim.
+    pub fn capture_rest(&mut self) -> String {
+        let out = join_tokens(&self.tokens[self.pos..]);
+        self.pos = self.tokens.len();
+        out
     }
 
     /// True when the remaining tokens are exhausted.

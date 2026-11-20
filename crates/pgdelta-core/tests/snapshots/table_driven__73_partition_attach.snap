@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <73_partition_attach/from.sql>
+-- to:   <73_partition_attach/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TABLE "public"."measurements" ATTACH PARTITION "public"."measurements_eu" FOR VALUES IN('Paris', 'Berlin');
+
+COMMIT;

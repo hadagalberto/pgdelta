@@ -2,7 +2,7 @@
 source: crates/pgdelta-core/tests/table_driven.rs
 expression: script
 ---
--- pgdelta 0.1.0 migration
+-- pgdelta 0.2.0 migration
 -- from: <35_auto_names_on_create/from.sql>
 -- to:   <35_auto_names_on_create/to.sql>
 --

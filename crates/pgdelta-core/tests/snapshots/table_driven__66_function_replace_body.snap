@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <66_function_replace_body/from.sql>
+-- to:   <66_function_replace_body/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE OR REPLACE FUNCTION "public"."double_it" ("a" integer) RETURNS integer LANGUAGE "sql" IMMUTABLE AS $$ SELECT a + a; $$;
+
+COMMIT;

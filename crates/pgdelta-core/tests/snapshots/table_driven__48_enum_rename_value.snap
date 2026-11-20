@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <48_enum_rename_value/from.sql>
+-- to:   <48_enum_rename_value/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+DROP TYPE "public"."mood";
+
+CREATE TYPE "public"."mood" AS ENUM ('sad', 'ok', 'glad');
+
+COMMIT;

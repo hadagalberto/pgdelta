@@ -116,6 +116,10 @@ pub(crate) fn canonical_type(data_type: &DataType) -> Result<String> {
             None => "bit varying".to_owned(),
         },
         DataType::Interval { .. } => "interval".to_owned(),
+        // Pseudo-types used by routine signatures (CREATE FUNCTION docs,
+        // `rettype`/`argtype`): a trigger function must return `trigger`.
+        DataType::Trigger => "trigger".to_owned(),
+        DataType::Regclass => "regclass".to_owned(),
         DataType::Array(elem) => array_string(elem)?,
         DataType::Custom(name, _) => custom_canonical(name)?,
         other => {

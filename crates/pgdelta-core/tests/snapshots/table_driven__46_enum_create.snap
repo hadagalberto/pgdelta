@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <46_enum_create/from.sql>
+-- to:   <46_enum_create/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE TYPE "public"."mood" AS ENUM ('sad', 'ok', 'happy');
+
+COMMIT;

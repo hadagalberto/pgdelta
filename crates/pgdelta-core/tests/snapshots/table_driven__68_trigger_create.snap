@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <68_trigger_create/from.sql>
+-- to:   <68_trigger_create/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE TRIGGER "check_update" BEFORE UPDATE OF "balance" ON "public"."accounts" FOR EACH ROW WHEN ("old"."balance" is distinct from "new"."balance") EXECUTE FUNCTION "public"."audit_update"();
+
+COMMIT;

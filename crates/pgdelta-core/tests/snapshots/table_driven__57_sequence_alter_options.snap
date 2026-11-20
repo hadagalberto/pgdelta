@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.2.0 migration
+-- from: <57_sequence_alter_options/from.sql>
+-- to:   <57_sequence_alter_options/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER SEQUENCE "public"."ticket_no" AS integer INCREMENT BY 5 MINVALUE 1 MAXVALUE 100 START WITH 1 CACHE 1 CYCLE OWNED BY NONE;
+
+COMMIT;

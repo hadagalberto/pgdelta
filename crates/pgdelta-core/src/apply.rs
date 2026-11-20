@@ -145,6 +145,10 @@ fn apply_statement(
             apply_alter_index_rename(catalog, source, index, name, new_name)
         }
         ParsedStatement::SessionOp => Ok(()),
+        // Milestone-2 object statements (types, sequences, views, routines,
+        // triggers, policies, comments, grants and partitioning) are applied
+        // by the dedicated module; old statements are all matched above.
+        _ => crate::apply_objects::apply_statement(catalog, source, index, stmt),
     }
 }
 
@@ -881,6 +885,10 @@ fn apply_create_table(
         name: name.clone(),
         columns: columns.clone(),
         constraints: Vec::new(),
+        partition: None,
+        partition_of: None,
+        rls_enabled: false,
+        rls_forced: false,
     };
     let constraints = build_constraints(
         source,
@@ -904,6 +912,10 @@ fn apply_create_table(
             name,
             columns,
             constraints,
+            partition: raw.partition.clone(),
+            partition_of: None,
+            rls_enabled: false,
+            rls_forced: false,
         },
     );
     Ok(())
@@ -934,6 +946,10 @@ fn apply_drop_table(
         let referencing: Vec<String> = catalog
             .tables
             .values()
+            // A self-referencing foreign key dies with the table; PostgreSQL
+            // only refuses a DROP when a *different* table still references
+            // it (RESTRICT).
+            .filter(|t| t.schema != schema || t.name != name)
             .filter(|t| {
                 t.constraints.iter().any(|c| match &c.kind {
                     ConstraintKind::ForeignKey {
@@ -1322,6 +1338,7 @@ fn apply_add_column(
     let raw_body = RawTable {
         columns: vec![raw.clone()],
         constraints: Vec::new(),
+        partition: None,
     };
     let constraint_raws = collect_constraints(&raw_body);
     let mut new_columns = existing.columns.clone();
@@ -1331,6 +1348,10 @@ fn apply_add_column(
         name: table_name.to_owned(),
         columns: new_columns.clone(),
         constraints: existing.constraints.clone(),
+        partition: existing.partition.clone(),
+        partition_of: existing.partition_of.clone(),
+        rls_enabled: existing.rls_enabled,
+        rls_forced: existing.rls_forced,
     };
     let constraints = build_constraints(
         source,

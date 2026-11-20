@@ -15,7 +15,7 @@ use insta::assert_snapshot;
 fn every_case_snapshots_and_converges() {
     let cases = common::load_cases();
     assert!(
-        cases.len() >= 45,
+        cases.len() >= 75,
         "the case corpus must stay complete (found {})",
         cases.len()
     );

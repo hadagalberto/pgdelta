@@ -1,4 +1,4 @@
-﻿//! pgdelta-core: PostgreSQL schema model, SQL sources, diff and migration planning.
+//! pgdelta-core: PostgreSQL schema model, SQL sources, diff and migration planning.
 //!
 //! This crate implements the milestone-1 scope of the `pgdelta` SPEC:
 //!
@@ -14,6 +14,7 @@
 //! repository root.
 
 pub mod apply;
+pub mod apply_objects;
 pub mod dep;
 pub mod diff;
 pub mod error;
@@ -25,9 +26,12 @@ pub mod sql;
 
 pub use error::{Error, Result};
 pub use model::{
-    Catalog, Column, Constraint, ConstraintKind, Deferrable, Extension, FkAction, FkMatch,
-    Generated, Identity, IdentityKind, Index, IndexElem, IndexElemKind, Schema, SequenceOptions,
-    Table,
+    ArgMode, Catalog, CheckOption, Column, CompositeAttribute, Constraint, ConstraintKind,
+    Deferrable, DomainConstraint, DomainConstraintKind, Extension, FkAction, FkMatch, Generated,
+    Grant, Identity, IdentityKind, Index, IndexElem, IndexElemKind, ObjectKind, ObjectRef,
+    Partition, PartitionKey, PartitionStrategy, Partitioning, PgType, PgTypeKind, Policy,
+    PolicyCommand, Routine, RoutineArg, RoutineKind, Schema, Security, Sequence, SequenceOptions,
+    SequenceOwner, Table, Trigger, TriggerEvent, TriggerLevel, TriggerTiming, View, Volatility,
 };
 pub use plan::{Plan, PlanSection, PlanStatement, PlanSummary, plan};
 pub use source::{SourceSpec, apply_sql_to, catalog_from_sql, load_catalog, split_sql_statements};
