@@ -39,7 +39,7 @@ pub use policy::{Policy, PolicyCommand};
 pub use routine::{ArgMode, Routine, RoutineArg, RoutineKind, Security, Volatility};
 pub use sequence::{Sequence, SequenceOwner};
 pub(crate) use table::sequence_type_range;
-pub use table::{Column, Generated, Identity, IdentityKind, SequenceOptions, Table};
+pub use table::{Column, ColumnStorage, Generated, Identity, IdentityKind, SequenceOptions, Table};
 pub use trigger::{Trigger, TriggerEvent, TriggerLevel, TriggerTiming};
 pub use types::{CompositeAttribute, DomainConstraint, DomainConstraintKind, PgType, PgTypeKind};
 pub use view::{CheckOption, View};

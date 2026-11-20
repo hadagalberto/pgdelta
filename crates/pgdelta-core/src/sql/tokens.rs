@@ -9,7 +9,7 @@
 
 use crate::naming;
 use sqlparser::dialect::PostgreSqlDialect;
-use sqlparser::tokenizer::Token;
+use sqlparser::tokenizer::{Token, Word};
 
 /// A single SQL statement: its tokens (whitespace stripped) plus
 /// helpers.
@@ -64,6 +64,35 @@ pub(crate) fn split_statements(
     Ok(statements.into_iter().filter(|s| !s.is_empty()).collect())
 }
 
+/// Maximum supported parenthesis/bracket nesting depth. Deeper input is
+/// rejected before it reaches the recursive expression/type parsers, which
+/// would otherwise overflow the thread stack on hostile input.
+pub(crate) const MAX_NESTING_DEPTH: usize = 128;
+
+/// Checks the maximum nesting depth of a tokenized source.
+///
+/// String literals and dollar-quoted bodies are single tokens, so brackets
+/// inside data never count toward the limit. Returns the first depth that
+/// exceeds [`MAX_NESTING_DEPTH`].
+pub(crate) fn check_nesting(statements: &[StatementTokens]) -> std::result::Result<(), usize> {
+    for statement in statements {
+        let mut depth = 0usize;
+        for token in &statement.tokens {
+            match token {
+                Token::LParen | Token::LBracket => {
+                    depth += 1;
+                    if depth > MAX_NESTING_DEPTH {
+                        return Err(depth);
+                    }
+                }
+                Token::RParen | Token::RBracket => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Joins tokens back into SQL text that sqlparser can re-parse.
 ///
 /// Spacing follows adjacency rules (no space around `.`/`::`, none before
@@ -94,6 +123,37 @@ pub(crate) fn join_tokens(tokens: &[Token]) -> String {
         );
     }
     out
+}
+
+/// Joins tokens into canonical SQL text: unquoted words are folded to lower
+/// case (PostgreSQL docs §4.1.1, "unquoted names are always folded to lower
+/// case") while quoted identifiers keep their exact spelling and quotes.
+/// Spacing is identical to [`join_tokens`]. Used for clause bodies that are
+/// stored verbatim but must compare equal between a SQL source and
+/// PostgreSQL's own deparse of the same object (notably `EXCLUDE`).
+pub(crate) fn join_tokens_canonical(tokens: &[Token]) -> String {
+    let folded: Vec<Token> = tokens
+        .iter()
+        .map(|tok| match tok {
+            Token::Word(w) if w.quote_style.is_none() => Token::Word(Word {
+                value: w.value.to_ascii_lowercase(),
+                quote_style: None,
+                keyword: w.keyword,
+            }),
+            other => other.clone(),
+        })
+        .collect();
+    join_tokens(&folded)
+}
+
+/// Tokenises arbitrary SQL text and renders it in canonical form (see
+/// [`join_tokens_canonical`]). Used when PostgreSQL deparses a clause with
+/// `pg_get_constraintdef` and pgdelta must compare it with a SQL source.
+pub(crate) fn normalize_sql_text(text: &str) -> String {
+    match sqlparser::tokenizer::Tokenizer::new(&PostgreSqlDialect {}, text).tokenize() {
+        Ok(tokens) => join_tokens_canonical(&tokens),
+        Err(_) => text.to_owned(),
+    }
 }
 
 /// A simple token cursor over a statement.

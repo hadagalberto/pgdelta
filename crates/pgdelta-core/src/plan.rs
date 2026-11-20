@@ -1040,6 +1040,16 @@ fn render_alter_statements(
                 quote_ident(column)
             ),
         )],
+        AlterChange::SetStorage { column, storage } => vec![(
+            rank::ALTER,
+            format!("storage:{column}"),
+            format!("{table}.{column}"),
+            format!(
+                "ALTER TABLE {target} ALTER COLUMN {} SET STORAGE {};",
+                quote_ident(column),
+                storage.map_or("DEFAULT", crate::model::ColumnStorage::as_sql)
+            ),
+        )],
         AlterChange::SetNotNull { column } => vec![(
             rank::ALTER,
             format!("notnull:{column}"),
@@ -1217,13 +1227,16 @@ fn render_create_table(table: &Table) -> String {
 }
 
 /// Renders a column definition: name, type, then the canonical option
-/// order COLLATE → DEFAULT → GENERATED (stored/identity) → NOT NULL.
+/// order STORAGE → COLLATE → DEFAULT → GENERATED (stored/identity) → NOT NULL.
 fn render_column_def(column: &Column) -> String {
     let mut out = format!(
         "{} {}",
         quote_ident(&column.name),
         render_type(&column.data_type)
     );
+    if let Some(storage) = &column.storage {
+        out.push_str(&format!(" STORAGE {}", storage.as_sql()));
+    }
     if let Some(collation) = &column.collation {
         out.push_str(&format!(" COLLATE {}", render_collation(collation)));
     }
@@ -1261,6 +1274,7 @@ fn render_constraint_body(constraint: &Constraint) -> String {
             format!("UNIQUE {nulls}({})", render_ident_list(columns))
         }
         ConstraintKind::Check { expr } => format!("CHECK ({expr})"),
+        ConstraintKind::Exclusion { spec } => format!("EXCLUDE {spec}"),
         ConstraintKind::ForeignKey { .. } => render_fk_body(constraint),
     };
     if let Some(Deferrable {
@@ -1455,7 +1469,11 @@ pub fn render_sql(plan: &Plan) -> String {
         return String::new();
     }
     let mut out = String::new();
-    out.push_str("-- pgdelta 0.4.0 migration\n");
+    out.push_str(concat!(
+        "-- pgdelta ",
+        env!("CARGO_PKG_VERSION"),
+        " migration\n"
+    ));
     out.push_str(&format!("-- from: {}\n", plan.from_desc));
     out.push_str(&format!("-- to:   {}\n", plan.to_desc));
     out.push_str("--\n");

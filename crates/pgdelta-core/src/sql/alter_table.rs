@@ -66,6 +66,14 @@ pub(crate) enum AlterAction {
         /// Column name.
         column: String,
     },
+    /// `ALTER COLUMN name SET STORAGE { PLAIN | EXTERNAL | EXTENDED | MAIN |
+    /// DEFAULT }` (PostgreSQL docs, `ALTER TABLE`).
+    SetStorage {
+        /// Column name.
+        column: String,
+        /// `None` is `SET STORAGE DEFAULT` (restore the type's default).
+        storage: Option<crate::model::ColumnStorage>,
+    },
     /// `ALTER COLUMN name ADD GENERATED {ALWAYS|BY DEFAULT} AS IDENTITY
     /// [(options)]` (PostgreSQL 10+).
     AddIdentity {
@@ -334,6 +342,7 @@ fn parse_action(
                 generated: parsed.generated,
                 identity: parsed.identity,
                 collation: parsed.collation,
+                storage: parsed.storage,
                 inline: parsed.inline,
             },
         });
@@ -688,6 +697,32 @@ fn parse_alter_column(
         ));
     }
     if cursor.eat_word("SET") {
+        if cursor.eat_word("STORAGE") {
+            let Some(word) = cursor.parse_ident() else {
+                return Err(Error::parse(
+                    source,
+                    index,
+                    "expected PLAIN, EXTERNAL, EXTENDED, MAIN or DEFAULT after SET STORAGE",
+                    text,
+                ));
+            };
+            let storage = if word.eq_ignore_ascii_case("DEFAULT") {
+                None
+            } else if let Some(mode) = crate::model::ColumnStorage::from_word(&word) {
+                Some(mode)
+            } else {
+                return Err(Error::invalid(
+                    source,
+                    index,
+                    format!(
+                        "invalid storage mode {word:?}: expected PLAIN, EXTERNAL, EXTENDED, MAIN \
+                         or DEFAULT (PostgreSQL docs, ALTER TABLE, SET STORAGE)"
+                    ),
+                    text,
+                ));
+            };
+            return Ok(AlterAction::SetStorage { column, storage });
+        }
         if cursor.eat_word("GENERATED") {
             let kind = if cursor.eat_word("ALWAYS") {
                 IdentityKind::Always
@@ -813,8 +848,8 @@ fn parse_alter_column(
             source,
             index,
             "ALTER COLUMN ... SET <option> is only modelled for identity sequence options \
-             (GENERATED, INCREMENT BY, MINVALUE, MAXVALUE, START WITH, CACHE, CYCLE); \
-             SET STATISTICS/STORAGE/(attribute options) are later milestones",
+             (GENERATED, INCREMENT BY, MINVALUE, MAXVALUE, START WITH, CACHE, CYCLE) and SET \
+             STORAGE; SET STATISTICS/(attribute options) are not modelled",
             text,
         ));
     }

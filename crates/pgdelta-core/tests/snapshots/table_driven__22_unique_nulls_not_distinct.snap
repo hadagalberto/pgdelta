@@ -2,7 +2,7 @@
 source: crates/pgdelta-core/tests/table_driven.rs
 expression: script
 ---
--- pgdelta 0.4.0 migration
+-- pgdelta 0.5.0 migration
 -- from: <22_unique_nulls_not_distinct/from.sql>
 -- to:   <22_unique_nulls_not_distinct/to.sql>
 --

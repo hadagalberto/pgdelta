@@ -371,6 +371,11 @@ fn analyze_one(n: &str, transactional: bool, state: &mut ScriptState) -> Vec<Haz
             "constraint-scan",
             "ADD PRIMARY KEY/UNIQUE builds a backing index and scans the table under ACCESS EXCLUSIVE.",
         ));
+    } else if adding_constraint && n.contains(" exclude ") {
+        out.push(locking(
+            "constraint-scan",
+            "ADD EXCLUDE builds a backing index and scans the table under ACCESS EXCLUSIVE (PostgreSQL docs, CREATE TABLE, EXCLUDE).",
+        ));
     }
 
     if n.contains(" validate constraint ") {
@@ -952,6 +957,7 @@ mod tests {
             "ALTER TABLE public.t ADD CONSTRAINT fk FOREIGN KEY (id) REFERENCES p (id);",
             "CREATE INDEX idx ON public.t (id);",
             "CREATE UNIQUE INDEX idx ON public.t (id);",
+            "ALTER TABLE public.t ADD CONSTRAINT t_excl EXCLUDE USING gist (d WITH &&);",
         ];
         for sql in vectors {
             assert!(

@@ -2,7 +2,7 @@
 source: crates/pgdelta-core/tests/table_driven.rs
 expression: script
 ---
--- pgdelta 0.4.0 migration
+-- pgdelta 0.5.0 migration
 -- from: <48_enum_rename_value/from.sql>
 -- to:   <48_enum_rename_value/to.sql>
 --

@@ -316,6 +316,17 @@ pub fn split_sql_statements(sql_text: &str) -> Result<Vec<String>> {
         message: format!("tokenization failed: {e}"),
         statement: String::new(),
     })?;
+    if let Err(depth) = sql::tokens::check_nesting(&statements) {
+        return Err(Error::Parse {
+            origin: "<sql>".to_owned(),
+            index: 0,
+            message: format!(
+                "SQL nesting depth {depth} exceeds the supported limit of {}",
+                sql::tokens::MAX_NESTING_DEPTH
+            ),
+            statement: String::new(),
+        });
+    }
     Ok(statements
         .iter()
         .map(crate::sql::tokens::StatementTokens::text)

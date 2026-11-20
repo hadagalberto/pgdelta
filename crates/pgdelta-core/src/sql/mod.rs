@@ -31,6 +31,17 @@ pub(crate) fn parse_source(source: &str, sql_text: &str) -> Result<Vec<ParsedSta
     let sql_text = sql_text.strip_prefix('\u{feff}').unwrap_or(sql_text);
     let statements = super::sql::tokens::split_statements(sql_text)
         .map_err(|e| Error::parse(source, 0, format!("tokenization failed: {e}"), sql_text))?;
+    if let Err(depth) = tokens::check_nesting(&statements) {
+        return Err(Error::parse(
+            source,
+            1,
+            format!(
+                "SQL nesting depth {depth} exceeds the supported limit of {}",
+                tokens::MAX_NESTING_DEPTH
+            ),
+            sql_text,
+        ));
+    }
     parse_statements(source, &statements, 1)
 }
 
@@ -359,6 +370,8 @@ pub(crate) struct RawColumn {
     pub identity: Option<(IdentityKind, ParsedSequenceOptions)>,
     /// Explicit collation.
     pub collation: Option<String>,
+    /// Explicit TOAST storage mode (`STORAGE ...`), if any.
+    pub storage: Option<crate::model::ColumnStorage>,
     /// Constraints declared inline on this column (PK/UNIQUE/CHECK/FK).
     pub inline: Vec<RawConstraint>,
 }
@@ -397,6 +410,11 @@ pub(crate) enum RawConstraintKind {
     Check {
         /// Normalised expression.
         expr: String,
+    },
+    /// `EXCLUDE`: the canonical body after the keyword.
+    Exclusion {
+        /// Normalised `USING ... (...) [WHERE (...)]` text.
+        spec: String,
     },
     /// `FOREIGN KEY` / `REFERENCES`.
     ForeignKey(RawForeignKey),

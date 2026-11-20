@@ -31,11 +31,11 @@ use tokio_postgres::{Client, NoTls, Row, Socket, types::ToSql};
 
 use crate::error::{Error, Result};
 use crate::model::{
-    ArgMode, Catalog, CheckOption, Column, CompositeAttribute, Constraint, ConstraintKind,
-    Deferrable, DomainConstraint, DomainConstraintKind, Extension, FkAction, FkMatch, Generated,
-    Grant, Identity, IdentityKind, Index, IndexElem, IndexElemKind, NullsOrder, ObjectKind,
-    ObjectRef, PUBLIC_SCHEMA, Partition, PartitionKey, PartitionStrategy, Partitioning, PgType,
-    PgTypeKind, Policy, PolicyCommand, Routine, RoutineArg, RoutineKind, Schema, Security,
+    ArgMode, Catalog, CheckOption, Column, ColumnStorage, CompositeAttribute, Constraint,
+    ConstraintKind, Deferrable, DomainConstraint, DomainConstraintKind, Extension, FkAction,
+    FkMatch, Generated, Grant, Identity, IdentityKind, Index, IndexElem, IndexElemKind, NullsOrder,
+    ObjectKind, ObjectRef, PUBLIC_SCHEMA, Partition, PartitionKey, PartitionStrategy, Partitioning,
+    PgType, PgTypeKind, Policy, PolicyCommand, Routine, RoutineArg, RoutineKind, Schema, Security,
     Sequence, SequenceOptions, SequenceOwner, SortOrder, Table, Trigger, TriggerEvent,
     TriggerLevel, TriggerTiming, View, Volatility,
 };
@@ -615,10 +615,11 @@ async fn introspect_columns(client: &Client, catalog: &mut Catalog) -> Result<Co
                 format_type(a.atttypid, a.atttypmod) AS data_type, \
                 a.attnotnull, a.attidentity::text, a.attgenerated::text, \
                 pg_get_expr(d.adbin, d.adrelid) AS default_expr, \
-                col.collname \
+                col.collname, a.attstorage::text, t.typstorage::text \
          FROM pg_attribute a \
          JOIN pg_class c ON c.oid = a.attrelid \
          JOIN pg_namespace n ON n.oid = c.relnamespace \
+         JOIN pg_type t ON t.oid = a.atttypid \
          LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum \
          LEFT JOIN pg_collation col ON col.oid = a.attcollation \
          WHERE c.relkind IN ('r', 'p', 'f') AND a.attnum > 0 AND NOT a.attisdropped \
@@ -639,6 +640,16 @@ async fn introspect_columns(client: &Client, catalog: &mut Catalog) -> Result<Co
         let generated: String = row.get(7);
         let default: Option<String> = row.get(8);
         let collation: Option<String> = row.get(9);
+        let attstorage: String = row.get(10);
+        let typstorage: String = row.get(11);
+        // `STORAGE DEFAULT` sets attstorage to the type's typstorage. Both
+        // sides normalise that case to `None` so a live database and an
+        // equivalent SQL source produce equal models.
+        let storage = if attstorage == typstorage {
+            None
+        } else {
+            ColumnStorage::from_pg_char(&attstorage)
+        };
         let column = Column {
             name,
             data_type: type_name(&data_type),
@@ -679,6 +690,7 @@ async fn introspect_columns(client: &Client, catalog: &mut Catalog) -> Result<Co
                 _ => None,
             },
             collation: collation.filter(|c| c != "default" && c != "-" && c != "???"),
+            storage,
         };
         // Generated columns store their expression in pg_attrdef just like
         // defaults; distinguish them by `attgenerated` (done above) and keep
@@ -753,7 +765,8 @@ async fn introspect_constraints(
                 k.convalidated, k.conkey::int2[], rs.rs_schema, rs.rs_table, \
                 k.confkey::int2[], k.confdeltype::text, k.confupdtype::text, \
                 k.confmatchtype::text, \
-                pg_get_expr(k.conbin, k.conrelid) AS check_expr, {nulls_column} \
+                pg_get_expr(k.conbin, k.conrelid) AS check_expr, {nulls_column}, \
+                pg_get_constraintdef(k.oid) AS constraint_def \
          FROM pg_constraint k \
          JOIN pg_class c ON c.oid = k.conrelid \
          JOIN pg_namespace n ON n.oid = c.relnamespace \
@@ -762,7 +775,7 @@ async fn introspect_constraints(
               FROM pg_class rc JOIN pg_namespace rn ON rn.oid = rc.relnamespace \
               WHERE rc.oid = k.confrelid \
          ) rs ON TRUE \
-         WHERE k.conrelid <> 0 AND k.contype IN ('p', 'u', 'c', 'f') \
+         WHERE k.conrelid <> 0 AND k.contype IN ('p', 'u', 'c', 'f', 'x') \
            AND n.nspname <> 'pg_catalog' AND n.nspname <> 'information_schema' \
            AND n.nspname NOT LIKE 'pg\\_%' \
          ORDER BY n.nspname, c.relname, k.conname"
@@ -785,6 +798,7 @@ async fn introspect_constraints(
         let match_type: String = row.get(13);
         let check_expr: Option<String> = row.get(14);
         let nulls_not_distinct: bool = row.get(15);
+        let constraint_def: Option<String> = row.get(16);
 
         let columns = column_names_with(numbers, &schema, &table, &constraint_columns);
         let kind = match contype.as_str() {
@@ -796,6 +810,20 @@ async fn introspect_constraints(
             "c" => ConstraintKind::Check {
                 expr: check_expr.map_or_else(String::new, |text| expr(strip_outer_parens(&text))),
             },
+            "x" => {
+                // `pg_get_constraintdef` returns `EXCLUDE ...` with the
+                // same clause grammar the SQL parser normalises. Strip the
+                // keyword and run both through the same token canonicaliser.
+                let def = constraint_def.unwrap_or_default();
+                let body = if def.len() >= 8 && def[..8].eq_ignore_ascii_case("EXCLUDE ") {
+                    &def[8..]
+                } else {
+                    def.as_str()
+                };
+                ConstraintKind::Exclusion {
+                    spec: crate::sql::tokens::normalize_sql_text(body),
+                }
+            }
             "f" => {
                 let (Some(ref_schema), Some(ref_table)) = (ref_schema, ref_table) else {
                     continue;

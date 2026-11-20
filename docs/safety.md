@@ -26,7 +26,7 @@ unless noted).
 | `drop-table`, `drop-schema`, `drop-column`, `drop-constraint` | destructive | The statement removes data or an integrity guarantee. |
 | `type-narrowing` | destructive | The target type cannot represent all source values (builtin ranks only; custom types are not guessed). |
 | `type-rewrite` | locking | `ALTER COLUMN ... TYPE` (normally rewrites the table). |
-| `constraint-scan` | locking | `ADD CHECK`/`FOREIGN KEY`/`PRIMARY KEY`/`UNIQUE` without `NOT VALID`. |
+| `constraint-scan` | locking | `ADD CHECK`/`FOREIGN KEY`/`PRIMARY KEY`/`UNIQUE`/`EXCLUDE` without `NOT VALID`. |
 | `not-null-scan` | locking | `SET NOT NULL` without a previously validated `CHECK (col IS NOT NULL)` in the same script. |
 | `non-concurrent-index` | locking | Standard `CREATE INDEX` (locks writers during the build). |
 | `concurrent-index-in-transaction` | locking | `CREATE INDEX CONCURRENTLY` inside an explicit transaction block (invalid SQL on PostgreSQL). |

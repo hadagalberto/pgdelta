@@ -10,7 +10,7 @@ repository.workspace = true
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-pgdelta-core = { path = "../pgdelta-core", version = "0.4.0" }
+pgdelta-core = { path = "../pgdelta-core", version = "0.5.0" }
 serde_json = "1"
 
 [[bin]]

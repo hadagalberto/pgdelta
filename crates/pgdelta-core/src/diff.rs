@@ -285,6 +285,13 @@ pub(crate) enum AlterChange {
         /// Column name.
         column: String,
     },
+    /// `ALTER COLUMN ... SET STORAGE` (`None` is `SET STORAGE DEFAULT`).
+    SetStorage {
+        /// Column name.
+        column: String,
+        /// Desired storage mode, or the type's default.
+        storage: Option<crate::model::ColumnStorage>,
+    },
     /// `ALTER COLUMN ... ADD GENERATED ... AS IDENTITY`.
     AddIdentity {
         /// Column name.
@@ -880,9 +887,9 @@ fn alter_key(change: &AlterChange) -> (u8, String) {
         AlterChange::SetDefault { column, .. } | AlterChange::DropDefault { column } => {
             (2, column.clone())
         }
-        AlterChange::SetNotNull { column } | AlterChange::DropNotNull { column } => {
-            (2, column.clone())
-        }
+        AlterChange::SetNotNull { column }
+        | AlterChange::DropNotNull { column }
+        | AlterChange::SetStorage { column, .. } => (2, column.clone()),
         AlterChange::AddIdentity { column, .. }
         | AlterChange::DropIdentity { column }
         | AlterChange::SetGeneratedKind { column, .. }
@@ -966,6 +973,12 @@ fn diff_column(
             alters.push(change);
         }
         diff_identity(from, to, alters);
+    }
+    if from.storage != to.storage {
+        alters.push(AlterChange::SetStorage {
+            column: to.name.clone(),
+            storage: to.storage,
+        });
     }
 }
 

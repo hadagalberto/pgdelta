@@ -64,7 +64,9 @@ fn occupied_relation_names(catalog: &Catalog, schema: &str) -> Vec<String> {
         for c in &table.constraints {
             if matches!(
                 c.kind,
-                ConstraintKind::PrimaryKey { .. } | ConstraintKind::Unique { .. }
+                ConstraintKind::PrimaryKey { .. }
+                    | ConstraintKind::Unique { .. }
+                    | ConstraintKind::Exclusion { .. }
             ) {
                 names.push(c.name.clone());
             }
@@ -81,7 +83,7 @@ fn constraint_columns(constraint: &Constraint) -> &[String] {
     match &constraint.kind {
         ConstraintKind::PrimaryKey { columns } | ConstraintKind::Unique { columns, .. } => columns,
         ConstraintKind::ForeignKey { columns, .. } => columns,
-        ConstraintKind::Check { .. } => &[],
+        ConstraintKind::Check { .. } | ConstraintKind::Exclusion { .. } => &[],
     }
 }
 
@@ -91,7 +93,7 @@ fn constraint_columns_mut(constraint: &mut Constraint) -> Option<&mut Vec<String
             Some(columns)
         }
         ConstraintKind::ForeignKey { columns, .. } => Some(columns),
-        ConstraintKind::Check { .. } => None,
+        ConstraintKind::Check { .. } | ConstraintKind::Exclusion { .. } => None,
     }
 }
 
@@ -292,6 +294,7 @@ fn build_column(source: &str, index: usize, raw: &RawColumn, text: &str) -> Resu
         generated: raw.generated.clone().map(|expr| Generated { expr }),
         identity,
         collation: raw.collation.clone(),
+        storage: raw.storage,
     })
 }
 
@@ -369,6 +372,14 @@ fn auto_name(
             &constraints_taken,
             others,
         ),
+        RawConstraintKind::Exclusion { .. } => {
+            // PostgreSQL names an unnamed exclusion constraint after its
+            // backing index with the `excl` suffix. The column list is not
+            // carried separately in the normalised spec, so pgdelta uses the
+            // stable `<table>_excl` form; name the constraint explicitly for
+            // byte-identical names across shadow/introspected sources.
+            naming::auto_constraint_name(table, None, "excl", &constraints_taken, others)
+        }
     }
 }
 
@@ -515,6 +526,9 @@ fn build_constraints(
                 nulls_distinct: *nulls_distinct,
             },
             RawConstraintKind::Check { expr } => ConstraintKind::Check { expr: expr.clone() },
+            RawConstraintKind::Exclusion { spec } => {
+                ConstraintKind::Exclusion { spec: spec.clone() }
+            }
             RawConstraintKind::ForeignKey(fk) => {
                 let self_reference = in_progress
                     .is_some_and(|t| t.schema == fk.ref_schema && t.name == fk.ref_table);
@@ -1091,6 +1105,11 @@ fn apply_alter_action(
         AlterAction::DropNotNull { column } => {
             let table = table_mut(catalog, schema, table_name, source, index)?;
             column_mut(table, column, source, index, "DROP NOT NULL")?.not_null = false;
+            Ok(())
+        }
+        AlterAction::SetStorage { column, storage } => {
+            let table = table_mut(catalog, schema, table_name, source, index)?;
+            column_mut(table, column, source, index, "SET STORAGE")?.storage = *storage;
             Ok(())
         }
         AlterAction::AddIdentity {

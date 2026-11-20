@@ -1,0 +1,20 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.5.0 migration
+-- from: <76_column_storage/from.sql>
+-- to:   <76_column_storage/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TABLE "public"."docs" ALTER COLUMN "body" SET STORAGE MAIN;
+
+ALTER TABLE "public"."docs" ALTER COLUMN "raw" SET STORAGE DEFAULT;
+
+ALTER TABLE "public"."docs" ALTER COLUMN "title" SET STORAGE EXTENDED;
+
+COMMIT;

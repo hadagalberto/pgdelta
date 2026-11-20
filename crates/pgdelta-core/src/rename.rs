@@ -544,6 +544,7 @@ fn rename_column_refs(catalog: &mut Catalog, schema: &str, table: &str, old: &st
                     replace_in_list(columns, old, new);
                 }
                 ConstraintKind::Check { expr } => *expr = replace_ident(expr, old, new),
+                ConstraintKind::Exclusion { spec } => *spec = replace_ident(spec, old, new),
                 ConstraintKind::ForeignKey {
                     columns,
                     ref_schema,

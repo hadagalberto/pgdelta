@@ -177,6 +177,7 @@ fn column_spec() -> impl Strategy<Value = Column> {
                             generated: None,
                             identity,
                             collation,
+                            storage: None,
                         }
                     },
                 )
@@ -233,7 +234,7 @@ fn table_spec() -> impl Strategy<Value = Table> {
                 ConstraintKind::Check { .. } => columns
                     .iter()
                     .any(|c| c.name == "val" && is_comparable(&c.data_type)),
-                ConstraintKind::ForeignKey { .. } => true,
+                ConstraintKind::ForeignKey { .. } | ConstraintKind::Exclusion { .. } => true,
             });
             // At most one primary key per table (PostgreSQL hard rule).
             let pk_count = constraints
@@ -249,6 +250,7 @@ fn table_spec() -> impl Strategy<Value = Table> {
                     ConstraintKind::Unique { .. } => format!("{name}_a_key"),
                     ConstraintKind::Check { .. } => format!("{name}_val_check"),
                     ConstraintKind::ForeignKey { .. } => format!("{name}_a_fkey"),
+                    ConstraintKind::Exclusion { .. } => format!("{name}_excl"),
                 };
             }
             // PRIMARY KEY implies NOT NULL (mirrors the applier).

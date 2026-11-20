@@ -9,13 +9,13 @@
 
 use sqlparser::tokenizer::Token;
 
-use super::tokens::{Cursor, join_tokens};
+use super::tokens::{Cursor, join_tokens, join_tokens_canonical};
 use super::{
     ParsedSequenceOptions, ParsedStatement, RawColumn, RawConstraint, RawConstraintKind,
     RawForeignKey, RawTable, parse_fk_actions, parse_sequence_options_paren,
 };
 use crate::error::{Error, Result};
-use crate::model::{Deferrable, IdentityKind};
+use crate::model::{ColumnStorage, Deferrable, IdentityKind};
 
 /// Words that may follow a column's data type (and therefore terminate the
 /// type-capture). All of them start a column option or the next
@@ -226,6 +226,7 @@ fn parse_table_member(
         generated: column.generated,
         identity: column.identity,
         collation: column.collation,
+        storage: column.storage,
         inline: Vec::new(),
     });
     Ok(())
@@ -247,6 +248,8 @@ pub(crate) struct ColumnDefParsed {
     pub(crate) identity: Option<(IdentityKind, ParsedSequenceOptions)>,
     /// Explicit collation.
     pub(crate) collation: Option<String>,
+    /// Explicit TOAST storage mode (`STORAGE ...`).
+    pub(crate) storage: Option<ColumnStorage>,
     /// Inline constraints.
     pub(crate) inline: Vec<RawConstraint>,
 }
@@ -305,6 +308,7 @@ pub(crate) fn parse_column_def(
         generated: None,
         identity: None,
         collation: None,
+        storage: None,
         inline: Vec::new(),
     };
 
@@ -526,11 +530,40 @@ fn parse_column_constraint(
         });
         return Ok(());
     }
-    if cursor.at_word("STORAGE") || cursor.at_word("COMPRESSION") {
+    if cursor.eat_word("STORAGE") {
+        // PostgreSQL docs, CREATE TABLE, `STORAGE { PLAIN | EXTERNAL |
+        // EXTENDED | MAIN | DEFAULT }`: DEFAULT restores the data type's
+        // default mode, which the model stores as `None`.
+        let Some(word) = cursor.parse_ident() else {
+            return Err(Error::parse(
+                source,
+                index,
+                "expected PLAIN, EXTERNAL, EXTENDED, MAIN or DEFAULT after STORAGE",
+                text,
+            ));
+        };
+        if word.eq_ignore_ascii_case("DEFAULT") {
+            out.storage = None;
+        } else if let Some(mode) = ColumnStorage::from_word(&word) {
+            out.storage = Some(mode);
+        } else {
+            return Err(Error::invalid(
+                source,
+                index,
+                format!(
+                    "invalid column storage mode {word:?}: expected PLAIN, EXTERNAL, EXTENDED, \
+                     MAIN or DEFAULT (PostgreSQL docs, CREATE TABLE, STORAGE)"
+                ),
+                text,
+            ));
+        }
+        return Ok(());
+    }
+    if cursor.at_word("COMPRESSION") {
         return Err(Error::unsupported(
             source,
             index,
-            "column STORAGE/COMPRESSION clauses are not modelled in milestone 1",
+            "column COMPRESSION clauses are not modelled (see docs/parser.md)",
             text,
         ));
     }
@@ -718,15 +751,34 @@ pub(crate) fn parse_table_constraint(
             text,
         ));
     }
-    if cursor.at_word("EXCLUDE") {
-        return Err(Error::unsupported(
-            source,
-            index,
-            "exclusion constraints are not modelled in milestone 1; sqlparser-rs cannot parse \
-             them either (see docs/parser.md). Track them with the exclusion-constraint \
-             milestone",
-            text,
-        ));
+    if cursor.eat_word("EXCLUDE") {
+        // PostgreSQL docs, CREATE TABLE, `EXCLUDE [ USING index_method ]
+        // ( exclude_element WITH operator [, ...] ) index_parameters
+        // [ WHERE ( predicate ) ]`. The clause is stored as canonical text
+        // (unquoted words folded to lower case) so that SQL sources and
+        // PostgreSQL's `pg_get_constraintdef` deparse normalise to the same
+        // value. Boundaries stop at a trailing deferrability clause or at
+        // the enclosing comma/parenthesis.
+        let start = cursor.pos();
+        let _ = cursor.capture_until_words(&["DEFERRABLE", "NOT", "INITIALLY", "ENFORCED"]);
+        let spec = join_tokens_canonical(&cursor.tokens()[start..cursor.pos()]);
+        let lower = spec.to_ascii_lowercase();
+        if spec.is_empty() || !(lower.starts_with("using ") || lower.starts_with('(')) {
+            return Err(Error::parse(
+                source,
+                index,
+                "expected '[USING method] (exclude_element WITH operator [, ...])' after EXCLUDE",
+                text,
+            ));
+        }
+        let deferrable = parse_deferrable(source, index, cursor, text)?;
+        raw.constraints.push(RawConstraint {
+            name,
+            kind: RawConstraintKind::Exclusion { spec },
+            deferrable,
+            column_level,
+        });
+        return Ok(());
     }
     if cursor.eat_words2("PRIMARY", "KEY") {
         let Some(columns) = cursor.parse_ident_list_paren() else {

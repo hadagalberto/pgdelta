@@ -6,6 +6,38 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] — milestone 5
+
+### Added
+
+- Column `STORAGE` modes (`PLAIN`/`EXTERNAL`/`EXTENDED`/`MAIN`/`DEFAULT`) in
+  `CREATE TABLE`, `ALTER TABLE ... SET STORAGE`, the model, the diff and the
+  planner. Introspection normalises the type default via `pg_type.typstorage`
+  so SQL and live sources converge.
+- Exclusion constraints (`EXCLUDE [USING method] (...)`) parsed, modelled,
+  diffed, rendered and introspected through `pg_get_constraintdef`; they are
+  reported as a locking `constraint-scan` hazard.
+- `docs/SPEC-CHECKLIST.md`: every SPEC requirement with its verification
+  status and the command or test that checks it.
+- Hostile-input CLI regression suite (malformed SQL, BOM/CRLF, NUL bytes,
+  Windows paths, empty/oversized sources, invalid flags and rename hints,
+  unreachable databases) and runnable `examples/basic/` fixtures for both
+  READMEs.
+
+### Changed
+
+- CI now runs `cargo fmt --all -- --check`, `cargo clippy --workspace
+  --all-targets -- -D warnings`, `cargo build --workspace` and `cargo test
+  --workspace` on Ubuntu, Windows and macOS, in addition to the PostgreSQL
+  13–18 integration matrix.
+
+### Fixed
+
+- Deeply nested SQL (2,000 parentheses) no longer overflows the stack: token
+  nesting above 128 levels is rejected with a source-located parse error.
+- README examples used the nonexistent `--out` flag; they now use the real
+  `--output` flag and verified fixture paths.
+
 ## [0.4.0] — milestone 4
 
 ### Added

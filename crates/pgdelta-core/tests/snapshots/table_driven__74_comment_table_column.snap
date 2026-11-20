@@ -2,7 +2,7 @@
 source: crates/pgdelta-core/tests/table_driven.rs
 expression: script
 ---
--- pgdelta 0.4.0 migration
+-- pgdelta 0.5.0 migration
 -- from: <74_comment_table_column/from.sql>
 -- to:   <74_comment_table_column/to.sql>
 --

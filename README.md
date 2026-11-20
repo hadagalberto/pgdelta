@@ -11,13 +11,14 @@ MIT licensed. [Leia em português](README.pt-BR.md).
 
 ## Status
 
-Milestone 4: on top of the full object coverage and live introspection of
-milestones 1–3, pgdelta now performs **safety analysis** (destructive and
-locking hazards), rewrites risky plans with **`--online`**, accepts opt-in
-**`--rename` hints**, exposes a **JSON plan** and a **colored human summary**,
-supports `pgdelta lint` for handwritten migrations, and returns **exit code 2**
-with `--fail-on-hazard`. Property tests cover online convergence, and the
-75 table-driven snapshot/convergence cases, live parity and known-valid /
+Milestone 5: on top of the object coverage, live introspection and safety
+analysis of milestones 1–4, pgdelta now also models **column `STORAGE`
+modes** and **exclusion constraints**, and has been audited requirement by
+requirement (see [docs/SPEC-CHECKLIST.md](docs/SPEC-CHECKLIST.md)). Hostile
+inputs are covered by regression tests: malformed SQL, NUL bytes, BOM/CRLF,
+Windows paths, empty and 5,000-column sources, and deeply nested expressions
+(which now fail cleanly instead of overflowing the stack). The 77 table-driven
+snapshot/convergence cases, live parity, property tests and known-valid /
 known-invalid vectors all pass.
 
 See [SPEC.md](SPEC.md) for the design, [docs/parser.md](docs/parser.md) for
@@ -26,36 +27,46 @@ and their official PostgreSQL citations.
 
 ## Usage
 
+All SQL-file examples below use the runnable fixtures in `examples/basic/`.
+Their output was verified with the exact commands shown; the `postgres://`
+examples additionally need a reachable server.
+
 ```sh
-# Generate a migration script
-cargo run -p pgdelta -- diff --from schema.sql --to wanted/ --out migration.sql
+# Generate a migration script (writes migration.sql)
+cargo run -p pgdelta -- diff --from examples/basic/old.sql \
+  --to examples/basic/new.sql --output migration.sql
 
 # JSON plan (sections, statements, hazards, summary)
-cargo run -p pgdelta -- diff --from old.sql --to new.sql --json
+cargo run -p pgdelta -- diff --from examples/basic/old.sql \
+  --to examples/basic/new.sql --json
 
 # Online-safe plan: NOT VALID → VALIDATE → SET NOT NULL,
 # FK NOT VALID → VALIDATE, CREATE INDEX CONCURRENTLY outside a transaction
-cargo run -p pgdelta -- diff --from old.sql --to new.sql --online
+cargo run -p pgdelta -- diff --from examples/basic/old.sql \
+  --to examples/basic/new.sql --online
 
 # Opt-in rename hints (never guessed silently); may be repeated
-cargo run -p pgdelta -- diff --from old.sql --to new.sql \
+cargo run -p pgdelta -- diff --from examples/basic/old.sql \
+  --to examples/basic/new.sql \
   --rename table.users=people --rename column.people.email=contact
 
 # Fail CI when the plan contains hazards (exit code 2)
-cargo run -p pgdelta -- diff --from live --to wanted/ --fail-on-hazard
+cargo run -p pgdelta -- diff --from examples/basic/old.sql \
+  --to examples/basic/new.sql --fail-on-hazard
 
 # Analyse a handwritten migration with the same rules
 cargo run -p pgdelta -- lint migration.sql --json
 
 # Dump the normalised model of a source
-cargo run -p pgdelta -- inspect schema/
+cargo run -p pgdelta -- inspect examples/basic/old.sql
 
 # Diff a live database against a declarative schema
-cargo run -p pgdelta -- diff --from postgres://user:pass@host/db --to wanted/
+cargo run -p pgdelta -- diff --from postgres://user:pass@host/db \
+  --to examples/basic/new.sql
 
 # Let PostgreSQL validate and normalise SQL sources in a shadow database
-cargo run -p pgdelta -- diff --from old.sql --to new.sql \
-  --shadow postgres://user:pass@host/postgres
+cargo run -p pgdelta -- diff --from examples/basic/old.sql \
+  --to examples/basic/new.sql --shadow postgres://user:pass@host/postgres
 ```
 
 The script has an explicit transactional `BEGIN; ... COMMIT;` block
@@ -114,5 +125,7 @@ crates.io.
 * `crates/pgdelta` — `clap` command line (`diff`, `inspect`, `lint`);
 * `crates/pgdelta-core/tests/cases` — table-driven `(from.sql, to.sql)`
   fixtures with insta snapshots and a convergence oracle;
-* `docs/` — parser decision, safety rules and citations;
-* `.github/workflows/ci.yml` — unit, lint and PostgreSQL 13–18 matrix.
+* `docs/` — parser decision, safety rules, SPEC checklist and citations;
+* `examples/basic/` — runnable source fixtures used by the README examples;
+* `.github/workflows/ci.yml` — build, lint, tests on Linux/macOS/Windows and
+  a PostgreSQL 13–18 matrix.

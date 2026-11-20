@@ -7,32 +7,13 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Warnings are errors everywhere, matching the local commands documented
+  # in both READMEs and run in docs/SPEC-CHECKLIST.md.
   RUSTFLAGS: -D warnings
 
 jobs:
-  formatting:
-    name: rustfmt
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - run: cargo fmt --all -- --check
-
-  clippy:
-    name: clippy -D warnings
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-
-  unit-tests:
-    name: unit tests (${{ matrix.os }})
+  quality:
+    name: ${{ matrix.os }} — fmt, clippy, build, test
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -41,8 +22,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - name: rustfmt
+        run: cargo fmt --all -- --check
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: build
+        run: cargo build --workspace
+      - name: tests
+        run: cargo test --workspace
 
   integration-postgres:
     name: postgres ${{ matrix.postgres }}

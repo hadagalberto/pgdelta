@@ -85,6 +85,77 @@ pub struct Column {
     /// `None` means "the data type's default collation", which is how
     /// PostgreSQL stores the common case.
     pub collation: Option<String>,
+    /// Explicit TOAST storage mode (`STORAGE`/`SET STORAGE`), if any.
+    ///
+    /// `None` means `STORAGE DEFAULT`, i.e. the mode PostgreSQL derives from
+    /// the column's data type (`pg_type.typstorage`). Live introspection
+    /// compares `pg_attribute.attstorage` with `pg_type.typstorage` and also
+    /// normalises the type default to `None`, so a SQL source and a live
+    /// database describing the same schema compare equal. See
+    /// `docs/parser.md` for the PostgreSQL citations.
+    pub storage: Option<ColumnStorage>,
+}
+
+/// Column TOAST storage mode.
+///
+/// The four modes and `DEFAULT` are defined by `CREATE TABLE` (PostgreSQL
+/// docs, `STORAGE { PLAIN | EXTERNAL | EXTENDED | MAIN | DEFAULT }`): `PLAIN`
+/// is inline and uncompressed and is required for fixed-length types; `MAIN`
+/// is inline and compressible; `EXTERNAL` is external and uncompressed;
+/// `EXTENDED` is external and compressed (the default for most types that
+/// support non-PLAIN storage). `DEFAULT` is represented by `None` on
+/// [`Column::storage`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ColumnStorage {
+    /// `STORAGE PLAIN` — inline, uncompressed.
+    Plain,
+    /// `STORAGE EXTERNAL` — external, uncompressed.
+    External,
+    /// `STORAGE EXTENDED` — external, compressed.
+    Extended,
+    /// `STORAGE MAIN` — inline, compressible.
+    Main,
+}
+
+impl ColumnStorage {
+    /// The SQL keyword for this mode (no `STORAGE` prefix).
+    #[must_use]
+    pub fn as_sql(self) -> &'static str {
+        match self {
+            ColumnStorage::Plain => "PLAIN",
+            ColumnStorage::External => "EXTERNAL",
+            ColumnStorage::Extended => "EXTENDED",
+            ColumnStorage::Main => "MAIN",
+        }
+    }
+
+    /// Parses a storage-mode word case-insensitively.
+    #[must_use]
+    pub fn from_word(word: &str) -> Option<Self> {
+        if word.eq_ignore_ascii_case("PLAIN") {
+            Some(ColumnStorage::Plain)
+        } else if word.eq_ignore_ascii_case("EXTERNAL") {
+            Some(ColumnStorage::External)
+        } else if word.eq_ignore_ascii_case("EXTENDED") {
+            Some(ColumnStorage::Extended)
+        } else if word.eq_ignore_ascii_case("MAIN") {
+            Some(ColumnStorage::Main)
+        } else {
+            None
+        }
+    }
+
+    /// Parses a single-character `pg_attribute.attstorage` value.
+    #[must_use]
+    pub fn from_pg_char(value: &str) -> Option<Self> {
+        match value {
+            "p" => Some(ColumnStorage::Plain),
+            "e" => Some(ColumnStorage::External),
+            "x" => Some(ColumnStorage::Extended),
+            "m" => Some(ColumnStorage::Main),
+            _ => None,
+        }
+    }
 }
 
 /// A stored generated column.

@@ -12,44 +12,64 @@ Licença MIT. [Read in English](README.md).
 
 ## Estado
 
-Marco 4: além da cobertura completa de objetos e da introspecção ao vivo dos
-marcos 1–3, o pgdelta agora faz **análise de segurança** (perigos
-destrutivos e de bloqueio), reescreve planos com **`--online`**, aceita
-**`--rename`** explícitos, expõe **plano JSON** e **resumo colorido**, oferece
-`pgdelta lint` para migrações escritas à mão e retorna **código de saída 2**
-com `--fail-on-hazard`. Testes de propriedade cobrem a convergência do modo
-online; os 75 casos de snapshot/convergência, paridade com banco ao vivo e
+Marco 5: além da cobertura de objetos, introspecção ao vivo e análise de
+segurança dos marcos 1–4, o pgdelta agora modela também **modos `STORAGE` de
+coluna** e **restrições de exclusão**, e foi auditado requisito por requisito
+(veja [docs/SPEC-CHECKLIST.md](docs/SPEC-CHECKLIST.md)). Entradas hostis têm
+testes de regressão: SQL malformado, bytes NUL, BOM/CRLF, caminhos do Windows,
+fontes vazias e com 5.000 colunas, e expressões profundamente aninhadas (que
+agora falham limpadamente em vez de estourar a pilha). Os 77 casos de
+snapshot/convergência, paridade com banco ao vivo, testes de propriedade e
 vetores válidos/inválidos continuam passando.
 
-Veja [SPEC.md](SPEC.md) para o projeto, [docs/parser.md](docs/parser.md)
-para a decisão sobre o parser e [docs/safety.md](docs/safety.md) para as regras
-de segurança e suas citações oficiais do PostgreSQL.
+Veja [SPEC.md](SPEC.md) para o projeto,
+[docs/SPEC-CHECKLIST.md](docs/SPEC-CHECKLIST.md) para a verificação de cada
+requisito, [docs/parser.md](docs/parser.md) para a decisão sobre o parser e
+[docs/safety.md](docs/safety.md) para as regras de segurança e suas citações
+oficiais do PostgreSQL.
 
 ## Uso
 
+Todos os exemplos com arquivos SQL abaixo usam as fixtures executáveis em
+`examples/basic/`. A saída de cada comando foi verificada exatamente como
+mostrada; os exemplos com `postgres://` também exigem um servidor acessível.
+
 ```sh
-# Gerar um script de migração
-cargo run -p pgdelta -- diff --from schema.sql --to wanted/ --out migration.sql
+# Gerar um script de migração (escreve migration.sql)
+cargo run -p pgdelta -- diff --from examples/basic/old.sql \
+  --to examples/basic/new.sql --output migration.sql
 
 # Plano em JSON (seções, comandos, perigos, resumo)
-cargo run -p pgdelta -- diff --from antigo.sql --to novo.sql --json
+cargo run -p pgdelta -- diff --from examples/basic/old.sql \
+  --to examples/basic/new.sql --json
 
 # Plano seguro para produção: NOT VALID → VALIDATE → SET NOT NULL,
 # FK NOT VALID → VALIDATE, CREATE INDEX CONCURRENTLY fora de transação
-cargo run -p pgdelta -- diff --from antigo.sql --to novo.sql --online
+cargo run -p pgdelta -- diff --from examples/basic/old.sql \
+  --to examples/basic/new.sql --online
 
 # Dicas de renomeação explícitas (nunca inferidas silenciosamente)
-cargo run -p pgdelta -- diff --from antigo.sql --to novo.sql \
-  --rename table.users=people --rename column.people.email=contato
+cargo run -p pgdelta -- diff --from examples/basic/old.sql \
+  --to examples/basic/new.sql \
+  --rename table.users=people --rename column.people.email=contact
 
 # Falhar no CI quando o plano contém perigos (código de saída 2)
-cargo run -p pgdelta -- diff --from live --to wanted/ --fail-on-hazard
+cargo run -p pgdelta -- diff --from examples/basic/old.sql \
+  --to examples/basic/new.sql --fail-on-hazard
 
 # Analisar uma migração escrita à mão com as mesmas regras
 cargo run -p pgdelta -- lint migration.sql --json
 
 # Despejar o modelo normalizado de uma fonte
-cargo run -p pgdelta -- inspect schema/
+cargo run -p pgdelta -- inspect examples/basic/old.sql
+
+# Comparar um banco ao vivo com um esquema declarativo
+cargo run -p pgdelta -- diff --from postgres://user:pass@host/db \
+  --to examples/basic/new.sql
+
+# Deixar o PostgreSQL validar e normalizar fontes SQL em um banco shadow
+cargo run -p pgdelta -- diff --from examples/basic/old.sql \
+  --to examples/basic/new.sql --shadow postgres://user:pass@host/postgres
 ```
 
 O script tem um bloco transacional explícito `BEGIN; ... COMMIT;` com

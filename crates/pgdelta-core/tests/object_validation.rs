@@ -7,7 +7,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use pgdelta_core::model::{
-    ObjectKind, PgTypeKind, PolicyCommand, RoutineKind, TriggerTiming, Volatility,
+    ColumnStorage, ConstraintKind, ObjectKind, PgTypeKind, PolicyCommand, RoutineKind,
+    TriggerTiming, Volatility,
 };
 use pgdelta_core::{apply_sql_to, catalog_from_sql, plan};
 
@@ -297,4 +298,54 @@ fn grants_revoke_and_comments_remove_real_state() {
     apply_sql_to(&mut converged, &sql, "migration.sql").expect("migration applies");
     assert!(converged.comments.is_empty());
     assert!(converged.grants.is_empty());
+}
+
+#[test]
+fn valid_storage_and_exclusion_vectors() {
+    let catalog = valid(
+        "CREATE TABLE t (a text STORAGE MAIN, b bytea STORAGE EXTERNAL, \
+         c text STORAGE DEFAULT, d tsrange);\
+         ALTER TABLE t ALTER COLUMN b SET STORAGE PLAIN;\
+         ALTER TABLE t ALTER COLUMN c SET STORAGE EXTENDED;\
+         ALTER TABLE t ADD CONSTRAINT t_excl EXCLUDE USING gist (d WITH &&);",
+    );
+    let t = catalog.table("public", "t").unwrap();
+    assert_eq!(t.column("a").unwrap().storage, Some(ColumnStorage::Main));
+    assert_eq!(t.column("b").unwrap().storage, Some(ColumnStorage::Plain));
+    assert_eq!(
+        t.column("c").unwrap().storage,
+        Some(ColumnStorage::Extended)
+    );
+    // `STORAGE DEFAULT` and an omitted clause both normalise to None.
+    assert_eq!(t.column("d").unwrap().storage, None);
+    let exclusion = t.constraint("t_excl").unwrap();
+    match &exclusion.kind {
+        ConstraintKind::Exclusion { spec } => {
+            assert!(spec.contains("using gist(d with &&)"), "{spec}");
+        }
+        other => panic!("expected exclusion constraint, got {other:?}"),
+    }
+    // A model compared with itself is always empty, storage included.
+    assert!(plan(&catalog, &catalog, "from", "to").unwrap().is_empty());
+}
+
+#[test]
+fn invalid_storage_and_exclusion_vectors_are_rejected() {
+    invalid(
+        "CREATE TABLE t (a text STORAGE BOGUS);",
+        "invalid column storage mode",
+    );
+    invalid(
+        "CREATE TABLE t (a text); ALTER TABLE t ALTER COLUMN a SET STORAGE weird;",
+        "invalid storage mode",
+    );
+    invalid(
+        "CREATE TABLE t (a text, EXCLUDE USING);",
+        "expected '[USING method]",
+    );
+    invalid(
+        "CREATE TABLE t (d tsrange); \
+         ALTER TABLE t ADD CONSTRAINT c EXCLUDE USING gist (d WITH &&) NOT VALID;",
+        "NOT VALID is only allowed for CHECK and foreign-key constraints",
+    );
 }

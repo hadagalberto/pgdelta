@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.5.0 migration
+-- from: <77_exclusion_constraint/from.sql>
+-- to:   <77_exclusion_constraint/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TABLE "public"."bookings" ADD CONSTRAINT "bookings_during_excl" EXCLUDE using gist(during with &&);
+
+COMMIT;

@@ -54,6 +54,20 @@ pub enum ConstraintKind {
         /// Normalised check expression.
         expr: String,
     },
+    /// `EXCLUDE [ USING method ] ( exclude_element WITH operator [, ...] )
+    /// [ INCLUDE (...) ] [ WITH (...) ] [ USING INDEX TABLESPACE ... ]
+    /// [ WHERE ( predicate ) ]`.
+    ///
+    /// The clause after the `EXCLUDE` keyword is stored as canonical,
+    /// normalised text, the same way view bodies are stored verbatim. The
+    /// normaliser folds unquoted words to lower case and keeps quoted
+    /// identifiers quoted, so a SQL source and PostgreSQL's own
+    /// `pg_get_constraintdef` deparse produce equal models (PostgreSQL docs,
+    /// `CREATE TABLE`, `EXCLUDE`; `CREATE INDEX`, exclude elements).
+    Exclusion {
+        /// Normalised `USING ... (...) [WHERE (...)]` body.
+        spec: String,
+    },
     /// `FOREIGN KEY (columns) REFERENCES ref_table (ref_columns) ...`.
     ForeignKey {
         /// Referencing columns.

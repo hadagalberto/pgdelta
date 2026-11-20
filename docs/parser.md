@@ -207,11 +207,12 @@ web tools and are cited from the relevant modules:
 
 ### Still out of scope (explicitly rejected)
 
-Publication membership, exclusion constraints, column storage settings,
-base/shell types, role membership grants, `GRANT ... ALL ... IN SCHEMA`,
-column-level grants, transition relations in triggers, extension ownership,
-and generated-expression rewriting on rename. Unsupported forms are
-rejected with a source-located error rather than silently dropped.
+Publication membership (optional in the SPEC), base/shell types, role
+membership grants, `GRANT ... ALL ... IN SCHEMA`, column-level grants,
+transition relations in triggers, extension ownership, and
+generated-expression rewriting on rename. Unsupported forms are rejected
+with a source-located error rather than silently dropped. Exclusion
+constraints and column `STORAGE` settings were added in milestone 5 (below).
 
 ## Live introspection and shadow sources (milestone 3)
 
@@ -250,3 +251,53 @@ The live tests (in `tests/live_postgres.rs`) require
 `PGDELTA_TEST_DATABASE_URL`; when it is unset they print a skip reason and
 return. CI sets it for a `postgres:13` … `postgres:18` service-container
 matrix.
+
+## Milestone 5: audit, hardening and remaining required coverage
+
+Re-reading the SPEC found two required object properties that the milestone-2
+"out of scope" list had wrongly excluded. Both are now implemented in the
+same normalised catalog and therefore work for every source (SQL file,
+directory, live and shadow).
+
+### Column `STORAGE`
+
+`CREATE TABLE` synopsis (fetched 2026-11-20 from
+<https://www.postgresql.org/docs/18/sql-createtable.html>):
+
+> `STORAGE { PLAIN | EXTERNAL | EXTENDED | MAIN | DEFAULT }` … Writing
+> `DEFAULT` sets the storage mode to the default mode for the column's data
+> type. `EXTENDED` is the default for most data types that support non-PLAIN
+> storage.
+
+Both `CREATE TABLE ... STORAGE <mode>` and `ALTER TABLE ... SET STORAGE
+<mode>` are parsed, modelled, diffed and rendered. The model stores
+`Option<ColumnStorage>`: `None` means `STORAGE DEFAULT`. Live introspection
+joins `pg_type` and compares `pg_attribute.attstorage` with
+`pg_type.typstorage`, normalising the type default to `None` as well, so a
+SQL file and a live database describing the same schema compare equal.
+`COMPRESSION` remains out of scope (it is not required by the SPEC).
+
+### Exclusion constraints
+
+The same page defines the synopsis:
+
+> `EXCLUDE [ USING index_method ] ( exclude_element WITH operator [, ...] )
+> index_parameters [ WHERE ( predicate ) ]`
+
+Exclusion constraints are modelled as a canonical clause body: unquoted
+words are folded to lower case, quoted identifiers keep their quotes, and
+spacing follows the same token-join rules as the rest of the parser. Live
+introspection deparses them with `pg_get_constraintdef` and passes the text
+through the same canonicaliser, so both sources normalise identically.
+`DEFERRABLE` uses the existing `Constraint.deferrable` field; `NOT VALID`
+is rejected because PostgreSQL only allows it on `CHECK` and foreign keys.
+
+### Hostile-input hardening
+
+`sql::tokens::check_nesting` rejects token streams nested deeper than 128
+levels before the recursive expression/type parsers run. A 2,000-level
+parenthesised expression previously overflowed the thread stack; it now
+produces a source-located parse error (regression test in
+`crates/pgdelta/tests/hostile.rs`). BOM stripping, CRLF, missing trailing
+semicolons, NUL bytes, unterminated strings/comments, Windows paths, empty
+and 5,000-column sources are all exercised at the CLI boundary.
