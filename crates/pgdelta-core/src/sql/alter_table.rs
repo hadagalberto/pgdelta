@@ -426,7 +426,6 @@ fn parse_add_constraint(
 
     let mut not_valid = false;
     if cursor.eat_words2("NOT", "VALID") {
-        cursor.advance(2);
         not_valid = true;
     }
     if not_valid {

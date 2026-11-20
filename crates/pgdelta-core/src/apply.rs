@@ -1339,9 +1339,6 @@ fn apply_drop_column(
     let before = table.columns.len();
     table.columns.retain(|c| c.name != name);
     if table.columns.len() == before && !if_exists {
-        if if_exists {
-            return Ok(());
-        }
         return Err(Error::invalid(
             source,
             index,

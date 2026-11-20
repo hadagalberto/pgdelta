@@ -93,16 +93,13 @@ pub fn load_catalog(spec: &SourceSpec) -> Result<Catalog> {
         SourceSpec::SqlDir(dir) => {
             let files = collect_sql_files(dir)?;
             let mut full = String::new();
-            let mut names: Vec<String> = Vec::new();
             for file in &files {
                 let text = read_file(file)?;
                 if !full.is_empty() {
                     full.push_str("\n\n");
                 }
                 full.push_str(&text);
-                names.push(file.display().to_string());
             }
-            let _ = names;
             catalog_from_sql(&full, &dir.display().to_string())
         }
     }
@@ -131,6 +128,32 @@ pub fn catalog_from_sql(sql_text: &str, source_name: &str) -> Result<Catalog> {
 pub fn apply_sql_to(catalog: &mut Catalog, sql_text: &str, source_name: &str) -> Result<()> {
     let statements = sql::parse_source(source_name, sql_text)?;
     apply_statements(catalog, source_name, &statements, 1)
+}
+
+/// Splits SQL text into individual statement texts, stripping a leading
+/// UTF-8 BOM.
+///
+/// The live-database integration tests (and, later, `pgdelta lint`) use
+/// this to execute a source statement by statement: a multi-statement
+/// simple-query message runs inside one implicit transaction on the
+/// server (PostgreSQL docs, `CREATE INDEX`: `CREATE INDEX CONCURRENTLY`
+/// "cannot run inside a transaction block"), so sources that mix session
+/// statements and concurrent index builds must be split first.
+///
+/// # Errors
+///
+/// Returns an error when the text cannot be tokenized.
+pub fn split_sql_statements(sql_text: &str) -> Result<Vec<String>> {
+    let sql_text = sql_text.strip_prefix('\u{feff}').unwrap_or(sql_text);
+    let statements = sql::tokens::split_statements(sql_text).map_err(|e| {
+        Error::Parse {
+            origin: "<sql>".to_owned(),
+            index: 0,
+            message: format!("tokenization failed: {e}"),
+            statement: String::new(),
+        }
+    })?;
+    Ok(statements.iter().map(|s| s.text()).collect())
 }
 
 fn read_file(path: &Path) -> Result<String> {

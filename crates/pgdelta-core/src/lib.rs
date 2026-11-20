@@ -25,8 +25,9 @@ pub mod sql;
 
 pub use error::{Error, Result};
 pub use model::{
-    Catalog, Column, Constraint, ConstraintKind, Extension, FkAction, FkMatch, Index, IndexElem,
-    IndexElemKind, Schema, Table,
+    Catalog, Column, Constraint, ConstraintKind, Deferrable, Extension, FkAction, FkMatch,
+    Generated, Identity, IdentityKind, Index, IndexElem, IndexElemKind, Schema, SequenceOptions,
+    Table,
 };
-pub use plan::{Plan, PlanStatement, plan};
-pub use source::{SourceSpec, load_catalog};
+pub use plan::{Plan, PlanSection, PlanStatement, PlanSummary, plan};
+pub use source::{SourceSpec, apply_sql_to, catalog_from_sql, load_catalog, split_sql_statements};

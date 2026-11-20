@@ -248,21 +248,16 @@ pub(crate) fn diff(from: &Catalog, to: &Catalog) -> Vec<Change> {
         }
     }
 
-    // Indexes: skips indexes of dropped tables (their indexes die with
-    // them — a separate DROP INDEX would be redundant).
+    // Indexes: an index of a dropped table dies with the table (a
+    // separate DROP INDEX would be redundant and even invalid after the
+    // table is gone).
     for index in to.indexes.values() {
-        let table_dropped = !to
-            .tables
-            .contains_key(&(index.table_schema.clone(), index.table.clone()));
-        let _ = table_dropped;
         if from
             .indexes
             .contains_key(&(index.schema.clone(), index.name.clone()))
         {
             continue;
         }
-        // An index whose table exists only in `to` is part of that
-        // table's creation.
         changes.push(Change::CreateIndex {
             index: index.clone(),
         });
