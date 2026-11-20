@@ -1,0 +1,22 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.5.0 migration
+-- from: <81_enum_remove_with_column/from.sql>
+-- to:   <81_enum_remove_with_column/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TYPE "public"."mood" RENAME TO "mood_old";
+
+CREATE TYPE "public"."mood" AS ENUM ('sad', 'happy');
+
+ALTER TABLE "public"."t" ALTER COLUMN "m" TYPE "mood" USING "m"::text::"mood";
+
+DROP TYPE "public"."mood_old";
+
+COMMIT;

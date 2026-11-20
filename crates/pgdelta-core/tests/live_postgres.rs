@@ -29,8 +29,11 @@
 
 mod common;
 
+use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use proptest::strategy::{Strategy, ValueTree};
+use proptest::test_runner::TestRunner;
 use tokio::task::JoinHandle;
 use tokio_postgres::{Client, NoTls};
 
@@ -168,15 +171,34 @@ fn run_suffix(tag: &str) -> String {
     format!("{tag}_{}_{nanos}", std::process::id())
 }
 
+/// True when running in CI. A missing database URL there means the live
+/// suite silently did nothing, which must fail the build (review finding 8).
+fn in_ci() -> bool {
+    std::env::var("CI").is_ok_and(|value| {
+        !value.is_empty() && !matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "no")
+    })
+}
+
 fn test_url() -> Option<String> {
-    if let Ok(url) = std::env::var("PGDELTA_TEST_DATABASE_URL") {
-        Some(url)
-    } else {
-        eprintln!(
-            "SKIP: PGDELTA_TEST_DATABASE_URL is unset; live PostgreSQL tests need a \
-             database URL (set it to postgres://user:pass@localhost:5432/postgres)"
-        );
-        None
+    match std::env::var("PGDELTA_TEST_DATABASE_URL") {
+        Ok(url) if !url.trim().is_empty() => Some(url),
+        _ => {
+            let message = concat!(
+                "SKIP: PGDELTA_TEST_DATABASE_URL is unset; live PostgreSQL tests need a ",
+                "database URL (set it to postgres://user:pass@localhost:5432/postgres)"
+            );
+            // Visible even without `--nocapture` (cargo captures stdout, but
+            // the line is printed on the test's output channel on failure)
+            // and explicit on both streams for interactive runs.
+            println!("{message}");
+            eprintln!("{message}");
+            assert!(
+                !in_ci(),
+                "PGDELTA_TEST_DATABASE_URL is unset in CI: live PostgreSQL tests must \
+                 not silently pass without a database"
+            );
+            None
+        }
     }
 }
 
@@ -294,6 +316,54 @@ fn normalize_for_comparison(catalog: &mut pgdelta_core::Catalog) {
     }
 }
 
+/// Independent convergence oracle: `pg_dump --schema-only` of a database.
+///
+/// pgdelta's own introspection cannot be the oracle — anything it misses
+/// converges by definition (review finding 9). The command is configurable:
+///
+/// * default: `pg_dump --schema-only --no-owner --no-privileges {url}`
+/// * Docker Desktop: `PGDELTA_TEST_PGDUMP='docker exec <container> pg_dump
+///   --schema-only --no-owner --no-privileges -U <user> -d {db}'`
+///
+/// `{url}` and `{db}` are substituted from the test database URL.
+fn dump_schema(url: &str, context: &str) -> String {
+    let template = std::env::var("PGDELTA_TEST_PGDUMP")
+        .unwrap_or_else(|_| "pg_dump --schema-only --no-owner --no-privileges {url}".to_owned());
+    let database = url
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .split('?')
+        .next()
+        .unwrap_or_default();
+    let command = template.replace("{url}", url).replace("{db}", database);
+    let parts: Vec<&str> = command.split_whitespace().collect();
+    assert!(!parts.is_empty(), "empty PGDELTA_TEST_PGDUMP command");
+    let output = Command::new(parts[0])
+        .args(&parts[1..])
+        .output()
+        .unwrap_or_else(|error| panic!("{context}: running {command:?}: {error}"));
+    assert!(
+        output.status.success(),
+        "{context}: pg_dump failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    normalize_dump(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Removes representation-only lines from a `pg_dump` stream. PostgreSQL 18
+/// adds `\restrict`/`\unrestrict` lines containing a random token.
+fn normalize_dump(text: &str) -> String {
+    text.lines()
+        .filter(|line| {
+            !line.starts_with("\\restrict ")
+                && !line.starts_with("\\unrestrict")
+                && !line.starts_with("-- Dumped by ")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Renders the remaining differences for an assertion message.
 fn diagnose(after: &pgdelta_core::Catalog, target: &pgdelta_core::Catalog, context: &str) {
     let planned = plan(after, target, "<actual>", "<expected>").expect("diagnostic plan");
@@ -364,7 +434,83 @@ async fn generated_migration_converges_on_live_postgres() {
         if !verification.is_empty() {
             diagnose(&converged, &target, &case.name);
         }
+        // Independent oracle: the two schemas must produce byte-identical
+        // `pg_dump --schema-only` output. pgdelta introspection is only a
+        // diagnostic aid, never the convergence authority.
+        let after_dump = dump_schema(&from_url, &case.name);
+        let target_dump = dump_schema(&to_url, &case.name);
+        assert_eq!(
+            after_dump, target_dump,
+            "{}: pg_dump --schema-only convergence failed (migrated vs target)",
+            case.name
+        );
     }
+    drop(from_client);
+    from_driver.abort();
+    drop(to_client);
+    to_driver.abort();
+    drop_database(&admin, &from_db).await;
+    drop_database(&admin, &to_db).await;
+    admin_driver.abort();
+}
+
+/// Property test whose convergence oracle is `pg_dump --schema-only`.
+///
+/// The extended generator produces same-named indexes with different
+/// definitions, routine body changes, enum removals and view-on-matview
+/// chains — the shapes that the circular introspection oracle let through.
+#[tokio::test]
+async fn rich_generated_migration_converges_with_pgdump_oracle() {
+    let Some(base) = test_url() else {
+        return;
+    };
+    let (admin, admin_driver) = connect_no_tls(&base).await;
+    supported_major(&admin).await;
+    let from_db = run_suffix("pgdelta_rich_from");
+    let to_db = run_suffix("pgdelta_rich_to");
+    create_database(&admin, &from_db).await;
+    create_database(&admin, &to_db).await;
+    let from_url = with_database(&base, &from_db);
+    let to_url = with_database(&base, &to_db);
+    let (from_client, from_driver) = connect_no_tls(&from_url).await;
+    let (to_client, to_driver) = connect_no_tls(&to_url).await;
+
+    let strategy = common::any_rich_catalog();
+    let mut runner = TestRunner::deterministic();
+    for iteration in 0..16 {
+        let a = strategy
+            .new_tree(&mut runner)
+            .expect("generating catalog a")
+            .current();
+        let b = strategy
+            .new_tree(&mut runner)
+            .expect("generating catalog b")
+            .current();
+        println!("rich property iteration {iteration}");
+        reset_database(&from_client).await;
+        reset_database(&to_client).await;
+        let empty = pgdelta_core::Catalog::new();
+        let create_a = pgdelta_core::plan::render_sql(
+            &plan(&empty, &a, "<empty>", "<a>").expect("planning a"),
+        );
+        let create_b = pgdelta_core::plan::render_sql(
+            &plan(&empty, &b, "<empty>", "<b>").expect("planning b"),
+        );
+        apply_sql(&from_client, &create_a, "rich a").await;
+        apply_sql(&to_client, &create_b, "rich b").await;
+        let migration = pgdelta_core::plan::render_sql(
+            &plan(&a, &b, "<a>", "<b>").expect("planning migration"),
+        );
+        apply_sql(&from_client, &migration, "rich migration").await;
+
+        let after_dump = dump_schema(&from_url, "rich property");
+        let target_dump = dump_schema(&to_url, "rich property");
+        assert_eq!(
+            after_dump, target_dump,
+            "rich property iteration {iteration}: pg_dump convergence failed"
+        );
+    }
+
     drop(from_client);
     from_driver.abort();
     drop(to_client);

@@ -1,0 +1,16 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.5.0 migration
+-- from: <79_function_body_change/from.sql>
+-- to:   <79_function_body_change/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE OR REPLACE FUNCTION "public"."f" () RETURNS integer LANGUAGE "sql" AS $$select 2$$;
+
+COMMIT;

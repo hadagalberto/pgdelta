@@ -335,6 +335,7 @@ fn parse_action(
         return Ok(AlterAction::AddColumn {
             if_not_exists,
             column: RawColumn {
+                serial: parsed.serial,
                 name: parsed.name,
                 data_type: parsed.data_type,
                 not_null: parsed.not_null,

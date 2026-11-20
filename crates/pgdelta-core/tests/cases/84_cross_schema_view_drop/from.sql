@@ -1,0 +1,3 @@
+CREATE SCHEMA s;
+CREATE TABLE t (c integer);
+CREATE VIEW s.v AS SELECT c FROM public.t;

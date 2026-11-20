@@ -84,7 +84,8 @@ pub(crate) enum Change {
         /// Type name.
         name: String,
     },
-    /// An enum gained values at the end (or had values renamed in place).
+    /// An enum gained values (at the end or at arbitrary positions) or had
+    /// values renamed in place — all reachable with `ALTER TYPE`.
     AlterEnum {
         /// Schema name.
         schema: String,
@@ -94,6 +95,19 @@ pub(crate) enum Change {
         append: Vec<String>,
         /// `(old, new)` renames at unchanged positions.
         renames: Vec<(String, String)>,
+        /// Values inserted before/after an existing label (PostgreSQL
+        /// `ALTER TYPE ... ADD VALUE ... BEFORE/AFTER`).
+        inserts: Vec<EnumInsert>,
+    },
+    /// An enum lost a value (or was reordered) while columns still use it.
+    /// PostgreSQL cannot drop the old type until those columns are rewritten.
+    ReplaceEnumInPlace {
+        /// Desired replacement type.
+        pg_type: crate::model::PgType,
+        /// Temporary name for the old type during the rewrite.
+        old_name: String,
+        /// `(table_schema, table, column)` dependent columns to rewrite.
+        columns: Vec<(String, String, String)>,
     },
     /// A type changed in a way that requires drop + recreate.
     ReplaceType {
@@ -232,6 +246,18 @@ pub(crate) enum Change {
         /// Desired partitioning (`None` = `REMOVE PARTITIONING`).
         partition: Option<crate::model::Partitioning>,
     },
+}
+
+/// One `ALTER TYPE ... ADD VALUE ... BEFORE/AFTER` insertion. Exactly one
+/// neighbour is set; when neither is set the value is appended.
+#[derive(Debug, Clone)]
+pub(crate) struct EnumInsert {
+    /// New label.
+    pub value: String,
+    /// Insert before this (already existing) label.
+    pub before: Option<String>,
+    /// Insert after this (already existing) label.
+    pub after: Option<String>,
 }
 
 /// One granular table alteration.
@@ -432,11 +458,21 @@ pub(crate) fn diff(from: &Catalog, to: &Catalog) -> Vec<Change> {
 
     // Indexes: an index of a dropped table dies with the table (a
     // separate DROP INDEX would be redundant and even invalid after the
-    // table is gone).
+    // table is gone). An index that keeps its name but changes its
+    // definition (columns/expressions, predicate, method, uniqueness,
+    // INCLUDE, opclass, collation, NULLS [NOT] DISTINCT, ...) is a
+    // different object in PostgreSQL's catalog: it must be dropped and
+    // recreated (PostgreSQL docs, CREATE INDEX / DROP INDEX).
     for index in to.indexes.values() {
+        let key = (index.schema.clone(), index.name.clone());
+        let table_dropped = dropped_tables.contains(&(index.schema.clone(), index.table.clone()));
+        if table_dropped {
+            continue;
+        }
         if from
             .indexes
-            .contains_key(&(index.schema.clone(), index.name.clone()))
+            .get(&key)
+            .is_some_and(|old| index_definition_eq(old, index))
         {
             continue;
         }
@@ -445,9 +481,13 @@ pub(crate) fn diff(from: &Catalog, to: &Catalog) -> Vec<Change> {
         });
     }
     for (schema, name) in from.indexes.keys() {
-        let table = &from.indexes[&(schema.clone(), name.clone())].table;
-        let table_dropped = dropped_tables.contains(&(schema.clone(), table.clone()));
-        if table_dropped || to.indexes.contains_key(&(schema.clone(), name.clone())) {
+        let old = &from.indexes[&(schema.clone(), name.clone())];
+        let table_dropped = dropped_tables.contains(&(schema.clone(), old.table.clone()));
+        let unchanged = to
+            .indexes
+            .get(&(schema.clone(), name.clone()))
+            .is_some_and(|new| index_definition_eq(old, new));
+        if table_dropped || unchanged {
             continue;
         }
         changes.push(Change::DropIndex {
@@ -459,6 +499,17 @@ pub(crate) fn diff(from: &Catalog, to: &Catalog) -> Vec<Change> {
     diff_objects(from, to, &mut changes);
 
     changes
+}
+
+/// Compares two indexes by their *definition*. `concurrent` is a build
+/// instruction, not catalog state (PostgreSQL has no flag recording how an
+/// index was built), so it is deliberately excluded.
+fn index_definition_eq(a: &Index, b: &Index) -> bool {
+    let mut a = a.clone();
+    let mut b = b.clone();
+    a.concurrent = false;
+    b.concurrent = false;
+    a == b
 }
 
 /// Diffs the milestone-2 object collections.
@@ -480,16 +531,41 @@ fn diff_objects(from: &Catalog, to: &Catalog, changes: &mut Vec<Change>) {
             }
         }
     }
-    let recreate_views: BTreeSet<(String, String)> = from
+    // Views that must be dropped around a schema change: views whose own
+    // definition changes, views reading a changed table, and — transitively
+    // — every view reading one of those views. PostgreSQL records a real
+    // dependency for view-on-view reads (including materialized views), so
+    // a dependent view blocks DROP VIEW of its source.
+    let mut recreate_views: BTreeSet<(String, String)> = from
         .views
         .iter()
-        .filter(|(_, view)| {
-            view.referenced_relations()
-                .iter()
-                .any(|relation| changed_tables.contains(relation))
+        .filter(|(key, view)| {
+            to.views.get(key) != Some(*view)
+                || view
+                    .referenced_relations()
+                    .iter()
+                    .any(|relation| changed_tables.contains(relation))
         })
         .map(|(key, _)| key.clone())
         .collect();
+    loop {
+        let mut added = false;
+        for (key, view) in &from.views {
+            if recreate_views.contains(key) {
+                continue;
+            }
+            if view
+                .referenced_relations()
+                .iter()
+                .any(|relation| recreate_views.contains(relation))
+            {
+                added |= recreate_views.insert(key.clone());
+            }
+        }
+        if !added {
+            break;
+        }
+    }
 
     // ---- Types -----------------------------------------------------------
     for (key, target) in &to.types {
@@ -497,7 +573,7 @@ fn diff_objects(from: &Catalog, to: &Catalog, changes: &mut Vec<Change>) {
             None => changes.push(Change::CreateType {
                 pg_type: target.clone(),
             }),
-            Some(source) => diff_type(key, source, target, changes),
+            Some(source) => diff_type(from, key, source, target, changes),
         }
     }
     for key in from.types.keys() {
@@ -724,6 +800,7 @@ fn diff_objects(from: &Catalog, to: &Catalog, changes: &mut Vec<Change>) {
 }
 
 fn diff_type(
+    catalog: &Catalog,
     key: &(String, String),
     source: &crate::model::PgType,
     target: &crate::model::PgType,
@@ -735,8 +812,7 @@ fn diff_type(
     if let (PgTypeKind::Enum { values: from }, PgTypeKind::Enum { values: to }) =
         (&source.kind, &target.kind)
     {
-        // Appends and in-place renames are the only ALTER-safe changes;
-        // removals/reordering require dropping the whole enum type.
+        // A pure append keeps the existing stable ALTER statement shape.
         let prefix = from.len() <= to.len() && from.iter().zip(to).all(|(a, b)| a == b);
         if prefix {
             changes.push(Change::AlterEnum {
@@ -744,6 +820,7 @@ fn diff_type(
                 name: key.1.clone(),
                 append: to[from.len()..].to_vec(),
                 renames: Vec::new(),
+                inserts: Vec::new(),
             });
             return;
         }
@@ -761,6 +838,60 @@ fn diff_type(
                     .zip(to)
                     .map(|(a, b)| (a.clone(), b.clone()))
                     .collect(),
+                inserts: Vec::new(),
+            });
+            return;
+        }
+        // `from` being a subsequence of `to` means the target is reachable
+        // purely by insertions. Anchor each new label to an *original*
+        // neighbour so every BEFORE/AFTER target exists when it executes.
+        let mut cursor = 0usize;
+        for value in to {
+            if from.get(cursor).is_some_and(|v| v == value) {
+                cursor += 1;
+            }
+        }
+        if cursor == from.len() {
+            cursor = 0;
+            let mut inserts = Vec::new();
+            for (position, value) in to.iter().enumerate() {
+                if from.get(cursor).is_some_and(|v| v == value) {
+                    cursor += 1;
+                    continue;
+                }
+                let before = from.get(cursor).cloned();
+                let after = if before.is_none() && cursor > 0 {
+                    from.get(cursor - 1).cloned()
+                } else {
+                    None
+                };
+                debug_assert!(
+                    before.is_some() || after.is_some() || from.is_empty() || position == 0
+                );
+                inserts.push(EnumInsert {
+                    value: value.clone(),
+                    before,
+                    after,
+                });
+            }
+            changes.push(Change::AlterEnum {
+                schema: key.0.clone(),
+                name: key.1.clone(),
+                append: Vec::new(),
+                renames: Vec::new(),
+                inserts,
+            });
+            return;
+        }
+        // Removals/reordering cannot be done with ALTER TYPE. When columns
+        // use the type, DROP TYPE is refused by PostgreSQL until those
+        // columns are rewritten through the type's text representation.
+        let columns = dependent_columns(&key.0, &key.1, catalog);
+        if !columns.is_empty() {
+            changes.push(Change::ReplaceEnumInPlace {
+                pg_type: target.clone(),
+                old_name: format!("{}_old", key.1),
+                columns,
             });
             return;
         }
@@ -768,6 +899,30 @@ fn diff_type(
     changes.push(Change::ReplaceType {
         pg_type: target.clone(),
     });
+}
+
+/// Finds columns of every table in `from` whose type is the enum named by
+/// `(schema, name)`. Returns `(table_schema, table, column)` triples.
+fn dependent_columns(schema: &str, name: &str, from: &Catalog) -> Vec<(String, String, String)> {
+    let qualified = format!("{schema}.{name}");
+    let mut out = Vec::new();
+    for ((table_schema, table_name), table) in &from.tables {
+        for column in &table.columns {
+            let data_type = column.data_type.as_str();
+            if data_type == name
+                || data_type == qualified
+                || (schema == PUBLIC_SCHEMA && data_type == format!("public.{name}"))
+            {
+                out.push((
+                    table_schema.clone(),
+                    table_name.clone(),
+                    column.name.clone(),
+                ));
+            }
+        }
+    }
+    out.sort();
+    out
 }
 
 fn diff_views(

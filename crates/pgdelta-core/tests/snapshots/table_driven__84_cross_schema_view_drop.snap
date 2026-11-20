@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.5.0 migration
+-- from: <84_cross_schema_view_drop/from.sql>
+-- to:   <84_cross_schema_view_drop/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+DROP VIEW "s"."v";
+
+DROP TABLE "public"."t";
+
+COMMIT;

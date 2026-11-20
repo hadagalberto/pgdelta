@@ -11,7 +11,7 @@ expression: script
 
 BEGIN;
 
-CREATE POLICY "owner_read" ON "public"."documents" FOR SELECT USING ("owner" = "current_user"());
+CREATE POLICY "owner_read" ON "public"."documents" FOR SELECT USING ("owner" = CURRENT_USER);
 
 ALTER TABLE "public"."documents" ENABLE ROW LEVEL SECURITY;
 

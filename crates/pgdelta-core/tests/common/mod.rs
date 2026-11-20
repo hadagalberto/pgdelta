@@ -21,8 +21,12 @@
 
 use std::path::{Path, PathBuf};
 
-use pgdelta_core::model::{Catalog, PUBLIC_SCHEMA, Table};
+use pgdelta_core::model::{
+    Catalog, CheckOption, Column, Index, IndexElem, IndexElemKind, PUBLIC_SCHEMA, PgType,
+    PgTypeKind, Routine, RoutineKind, Table, View, Volatility,
+};
 use pgdelta_core::{apply_sql_to, catalog_from_sql, plan};
+use proptest::prelude::*;
 
 /// One table-driven case.
 pub struct Case {
@@ -99,6 +103,170 @@ pub fn run_case(case: &Case) -> String {
     assert_equivalent(&converged, &to, &case.name);
 
     script
+}
+
+/// An extended generator that adds the object shapes the review found were
+/// never exercised: same-named indexes with different definitions, routine
+/// body changes, enum value removals and a view reading a materialized view.
+/// Every variant is a plain `bool`, so two independently generated catalogs
+/// regularly disagree on exactly one of those objects.
+#[allow(dead_code)]
+pub fn any_rich_catalog() -> impl Strategy<Value = Catalog> {
+    use pgdelta_core::model::RoutineArg;
+
+    (
+        Just(Catalog::new()),
+        proptest::bool::ANY,
+        proptest::bool::ANY,
+        proptest::bool::ANY,
+        proptest::bool::ANY,
+    )
+        .prop_map(
+            |(mut catalog, upper_index, alternate_body, short_enum, alternate_mv)| {
+                catalog.ensure_schema(PUBLIC_SCHEMA);
+                let public = PUBLIC_SCHEMA.to_owned();
+                catalog.tables.insert(
+                    (public.clone(), "rich".to_owned()),
+                    Table {
+                        schema: public.clone(),
+                        name: "rich".to_owned(),
+                        columns: vec![
+                            Column {
+                                name: "id".to_owned(),
+                                data_type: "integer".to_owned(),
+                                not_null: true,
+                                default: None,
+                                generated: None,
+                                identity: None,
+                                collation: None,
+                                storage: None,
+                            },
+                            Column {
+                                name: "txt".to_owned(),
+                                data_type: "text".to_owned(),
+                                not_null: false,
+                                default: None,
+                                generated: None,
+                                identity: None,
+                                collation: None,
+                                storage: None,
+                            },
+                        ],
+                        constraints: Vec::new(),
+                        partition: None,
+                        partition_of: None,
+                        rls_enabled: false,
+                        rls_forced: false,
+                    },
+                );
+                let expression = if upper_index {
+                    "\"upper\"(\"txt\")"
+                } else {
+                    "\"lower\"(\"txt\")"
+                };
+                catalog.indexes.insert(
+                    (public.clone(), "rich_expr_idx".to_owned()),
+                    Index {
+                        schema: public.clone(),
+                        name: "rich_expr_idx".to_owned(),
+                        table_schema: public.clone(),
+                        table: "rich".to_owned(),
+                        unique: false,
+                        concurrent: false,
+                        method: None,
+                        columns: vec![IndexElem {
+                            kind: IndexElemKind::Expression(expression.to_owned()),
+                            collation: None,
+                            opclass: None,
+                            opclass_params: None,
+                            order: None,
+                            nulls: None,
+                        }],
+                        include: Vec::new(),
+                        nulls_distinct: true,
+                        with: Vec::new(),
+                        tablespace: None,
+                        predicate: None,
+                    },
+                );
+                catalog.routines.insert(
+                    (public.clone(), "rich_fn".to_owned(), String::new()),
+                    Routine {
+                        schema: public.clone(),
+                        name: "rich_fn".to_owned(),
+                        kind: RoutineKind::Function,
+                        args: Vec::<RoutineArg>::new(),
+                        return_type: Some("integer".to_owned()),
+                        returns_setof: false,
+                        return_table: Vec::new(),
+                        language: "sql".to_owned(),
+                        body: if alternate_body {
+                            "select 2".to_owned()
+                        } else {
+                            "select 1".to_owned()
+                        },
+                        volatility: Volatility::Stable,
+                        security: pgdelta_core::model::Security::Invoker,
+                        strict: false,
+                        leakproof: false,
+                        window: false,
+                        parallel: None,
+                        cost: None,
+                        rows: None,
+                        settings: Vec::new(),
+                    },
+                );
+                catalog.types.insert(
+                    (public.clone(), "rich_enum".to_owned()),
+                    PgType {
+                        schema: public.clone(),
+                        name: "rich_enum".to_owned(),
+                        kind: PgTypeKind::Enum {
+                            values: if short_enum {
+                                vec!["a".to_owned()]
+                            } else {
+                                vec!["a".to_owned(), "b".to_owned()]
+                            },
+                        },
+                    },
+                );
+                catalog.views.insert(
+                    (public.clone(), "rich_mv".to_owned()),
+                    View {
+                        schema: public.clone(),
+                        name: "rich_mv".to_owned(),
+                        columns: Vec::new(),
+                        query: if alternate_mv {
+                            "SELECT id, txt FROM rich".to_owned()
+                        } else {
+                            "SELECT id FROM rich".to_owned()
+                        },
+                        options: Vec::new(),
+                        tablespace: None,
+                        access_method: None,
+                        check_option: CheckOption::None,
+                        materialized: true,
+                        with_data: true,
+                    },
+                );
+                catalog.views.insert(
+                    (public.clone(), "rich_v".to_owned()),
+                    View {
+                        schema: public,
+                        name: "rich_v".to_owned(),
+                        columns: Vec::new(),
+                        query: "SELECT id FROM rich_mv".to_owned(),
+                        options: Vec::new(),
+                        tablespace: None,
+                        access_method: None,
+                        check_option: CheckOption::None,
+                        materialized: false,
+                        with_data: true,
+                    },
+                );
+                catalog
+            },
+        )
 }
 
 /// Model equality modulo physical column order (see the module docs).

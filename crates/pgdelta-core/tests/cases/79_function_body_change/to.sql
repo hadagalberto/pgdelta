@@ -1,0 +1,1 @@
+CREATE FUNCTION f() RETURNS integer LANGUAGE SQL AS 'select 2';

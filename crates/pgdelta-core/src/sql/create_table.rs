@@ -219,6 +219,7 @@ fn parse_table_member(
         raw.constraints.push(inline);
     }
     raw.columns.push(RawColumn {
+        serial: column.serial,
         name: column.name,
         data_type: column.data_type,
         not_null: column.not_null,
@@ -234,6 +235,9 @@ fn parse_table_member(
 
 /// Intermediate column definition (inline constraints still attached).
 pub(crate) struct ColumnDefParsed {
+    /// `serial`-family pseudo-type: the data type has already been rewritten
+    /// to its base integer type; the applier creates the backing sequence.
+    pub(crate) serial: bool,
     /// Column name.
     pub(crate) name: String,
     /// Canonical data type.
@@ -288,19 +292,20 @@ pub(crate) fn parse_column_def(
             text,
         )
     })?;
-    if super::datatype::is_serial_family(&data_type) {
-        return Err(Error::unsupported(
-            source,
-            index,
-            format!(
-                "{data_type} pseudo-types imply a sequence object; sequences are modelled in a \
-                 later milestone — use GENERATED ... AS IDENTITY instead (see docs/parser.md)"
-            ),
-            text,
-        ));
-    }
+    // `serial` expands to an integer column, a sequence and a DEFAULT of
+    // `nextval(...)` (PostgreSQL, "Serial Types"). Keep a marker for the
+    // applier, which knows the table/schema names needed for the sequence.
+    let serial = super::datatype::serial_base_type(&data_type).is_some();
+    let data_type = if serial {
+        super::datatype::serial_base_type(&data_type)
+            .unwrap_or(&data_type)
+            .to_owned()
+    } else {
+        data_type
+    };
 
     let mut out = ColumnDefParsed {
+        serial,
         name,
         data_type,
         not_null: false,

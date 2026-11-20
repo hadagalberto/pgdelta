@@ -161,6 +161,13 @@ fn render_inner(expr: &Expr) -> Result<String> {
                 ));
             }
             let name_rendered = render_object_name(name)?;
+            // SQL special values are parsed as zero-argument functions but
+            // PostgreSQL dumps them as bare keywords (pg_dump output for a
+            // policy `USING (owner = current_user)` is `CURRENT_USER`).
+            // Rendering them as `"current_user"()` changes the schema dump.
+            if let Some(keyword) = special_zero_arg_keyword(name) {
+                return Ok(keyword.to_owned());
+            }
             let args = match args {
                 FunctionArguments::List(list) => {
                     if list.duplicate_treatment == Some(DuplicateTreatment::Distinct) {
@@ -294,6 +301,30 @@ fn folded(value: &str, was_quoted: bool) -> String {
         value.to_owned()
     } else {
         value.to_ascii_lowercase()
+    }
+}
+
+/// Zero-argument SQL special values that PostgreSQL renders as bare
+/// keywords rather than function calls (PostgreSQL §9.4, "System Info
+/// Functions"; `CURRENT_USER`, `SESSION_USER`, `USER` and the date/time
+/// keywords).
+fn special_zero_arg_keyword(name: &sqlparser::ast::ObjectName) -> Option<&'static str> {
+    let [ObjectNamePart::Identifier(ident)] = name.0.as_slice() else {
+        return None;
+    };
+    if ident.quote_style.is_some() {
+        return None;
+    }
+    match ident.value.to_ascii_lowercase().as_str() {
+        "current_user" => Some("CURRENT_USER"),
+        "session_user" => Some("SESSION_USER"),
+        "current_date" => Some("CURRENT_DATE"),
+        "current_time" => Some("CURRENT_TIME"),
+        "current_timestamp" => Some("CURRENT_TIMESTAMP"),
+        "localtime" => Some("LOCALTIME"),
+        "localtimestamp" => Some("LOCALTIMESTAMP"),
+        "user" => Some("USER"),
+        _ => None,
     }
 }
 

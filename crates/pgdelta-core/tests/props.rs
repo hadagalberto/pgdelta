@@ -442,6 +442,21 @@ proptest! {
         common::assert_equivalent(&actual, &a, "plan(empty -> a) applied to empty");
     }
 
+    /// The extended generator covers the object shapes the independent
+    /// review found missing: same-named indexes with different definitions,
+    /// routine body changes, enum value removals and view-on-matview chains.
+    #[test]
+    fn rich_plan_applied_to_a_converges_to_b(
+        a in common::any_rich_catalog(),
+        b in common::any_rich_catalog()
+    ) {
+        let planned = plan(&a, &b, "<a>", "<b>").unwrap();
+        let script = pgdelta_core::plan::render_sql(&planned);
+        let mut converged = a.clone();
+        apply_sql_to(&mut converged, &script, "migration.sql").unwrap();
+        common::assert_equivalent(&converged, &b, "rich plan(a -> b) applied to a");
+    }
+
     /// The `--online` rewriting must preserve convergence: the extra
     /// NOT VALID/VALIDATE/CHECK bookkeeping is a build strategy, not schema
     /// state. `CONCURRENTLY` is likewise a build method, so the generated

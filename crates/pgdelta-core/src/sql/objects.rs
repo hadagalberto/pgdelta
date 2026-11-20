@@ -1166,15 +1166,14 @@ fn take_routine_body(cursor: &mut Cursor) -> Option<String> {
             cursor.advance(1);
             Some(out)
         }
-        Token::DollarQuotedString(DollarQuotedString { tag, value }) => {
+        Token::DollarQuotedString(DollarQuotedString { value, .. }) => {
+            // Store the *inner* text, exactly like `pg_proc.prosrc` does for
+            // a live database and like a single-quoted `AS '..'` body does.
+            // Delimiters are a build detail; the planner always emits a
+            // safe dollar-quoted body (see `plan::render_create_routine`).
             let out = value.clone();
-            let tag = tag.clone().unwrap_or_default();
             cursor.advance(1);
-            Some(if tag.is_empty() {
-                format!("$${out}$$")
-            } else {
-                format!("${tag}${out}${tag}$")
-            })
+            Some(out)
         }
         _ => None,
     }

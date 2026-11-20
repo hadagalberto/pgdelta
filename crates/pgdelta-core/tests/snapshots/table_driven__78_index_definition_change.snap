@@ -1,0 +1,18 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.5.0 migration
+-- from: <78_index_definition_change/from.sql>
+-- to:   <78_index_definition_change/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+DROP INDEX "public"."i";
+
+CREATE INDEX "i" ON "public"."t" (("upper"("note")));
+
+COMMIT;

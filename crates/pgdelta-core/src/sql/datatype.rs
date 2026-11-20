@@ -228,8 +228,17 @@ fn alias(name: &str) -> Option<String> {
 /// True when the canonical string is a `serial`-family pseudo-type; these
 /// imply a sequence object, which the model does not cover in milestone 1.
 pub(crate) fn is_serial_family(canonical: &str) -> bool {
-    matches!(
-        canonical,
-        "serial" | "bigserial" | "smallserial" | "serial2" | "serial4" | "serial8"
-    )
+    serial_base_type(canonical).is_some()
+}
+
+/// The concrete integer type a `serial`-family pseudo-type expands to
+/// (PostgreSQL, "Serial Types": `serial` → `integer`, `bigserial` →
+/// `bigint`, `smallserial` → `smallint`).
+pub(crate) fn serial_base_type(canonical: &str) -> Option<&'static str> {
+    match canonical {
+        "serial" | "serial4" => Some("integer"),
+        "bigserial" | "serial8" => Some("bigint"),
+        "smallserial" | "serial2" => Some("smallint"),
+        _ => None,
+    }
 }

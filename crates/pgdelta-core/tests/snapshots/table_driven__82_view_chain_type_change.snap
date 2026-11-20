@@ -1,0 +1,24 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.5.0 migration
+-- from: <82_view_chain_type_change/from.sql>
+-- to:   <82_view_chain_type_change/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+DROP VIEW "public"."v2";
+
+DROP MATERIALIZED VIEW "public"."mv";
+
+ALTER TABLE "public"."t" ALTER COLUMN "c" TYPE bigint;
+
+CREATE MATERIALIZED VIEW "public"."mv" AS SELECT c FROM t;
+
+CREATE VIEW "public"."v2" AS SELECT c FROM mv;
+
+COMMIT;

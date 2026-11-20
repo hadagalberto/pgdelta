@@ -1,0 +1,22 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.5.0 migration
+-- from: <80_mutual_fk_drop/from.sql>
+-- to:   <80_mutual_fk_drop/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+ALTER TABLE "public"."a" DROP CONSTRAINT "a_b_fkey";
+
+ALTER TABLE "public"."b" DROP CONSTRAINT "b_a_fkey";
+
+DROP TABLE "public"."a";
+
+DROP TABLE "public"."b";
+
+COMMIT;

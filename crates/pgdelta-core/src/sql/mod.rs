@@ -356,6 +356,8 @@ pub(crate) struct RawTable {
 /// A parsed column definition.
 #[derive(Debug, Clone)]
 pub(crate) struct RawColumn {
+    /// `serial`-family pseudo-type: expand into a backing sequence.
+    pub serial: bool,
     /// Column name.
     pub name: String,
     /// Canonical data type.

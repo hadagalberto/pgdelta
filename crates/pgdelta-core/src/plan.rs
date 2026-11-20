@@ -312,35 +312,44 @@ fn plan_impl(
             }
             Change::DropTable { schema, name } => {
                 // Views reading this table must disappear first: PostgreSQL
-                // refuses DROP TABLE while a view depends on it (RESTRICT).
-                let mut after = Vec::new();
-                for (view_schema, view_name) in from.views.keys() {
-                    if view_schema == schema {
-                        // Cheap conservative edge: any view in the same
-                        // schema is dropped before the table; only views
-                        // that actually read it are emitted by the diff.
-                        let key = format!("drop-view:{view_schema}.{view_name}");
-                        if changes.iter().any(|c| matches!(c, Change::DropView { schema: s, name: n, .. } if s == view_schema && n == view_name)) {
-                            after.push(key);
+                // refuses DROP TABLE while a view in *any* schema depends
+                // on it (DROP TABLE ... RESTRICT).
+                let after = dropped_view_edges(from, schema, name, &changes);
+                // A foreign key between two tables dropped in the same plan
+                // makes the drop order cyclic (PostgreSQL reports
+                // "internal error: dependency cycle"). Drop those FK
+                // constraints explicitly before any table goes away; once
+                // they are gone the tables are independent and can be
+                // dropped in any order. Self-references die with the table.
+                if let Some(table) = from.table(schema, name) {
+                    for constraint in &table.constraints {
+                        if let ConstraintKind::ForeignKey {
+                            ref_schema,
+                            ref_table,
+                            ..
+                        } = &constraint.kind
+                        {
+                            if ref_schema == schema && ref_table == name {
+                                continue;
+                            }
+                            let referenced_dropped = changes.iter().any(|c| {
+                                matches!(c, Change::DropTable { schema: s, name: n }
+                                    if s == ref_schema && n == ref_table)
+                            });
+                            if referenced_dropped {
+                                nodes.push(node(
+                                    rank::DROP_CONSTRAINT,
+                                    format!("drop-fk:{schema}.{name}.{}", constraint.name),
+                                    "drop",
+                                    format!("{name}.{}", constraint.name),
+                                    format!(
+                                        "ALTER TABLE {} DROP CONSTRAINT {};",
+                                        qualified(schema, name),
+                                        crate::naming::quote_ident(&constraint.name)
+                                    ),
+                                ));
+                            }
                         }
-                    }
-                }
-                // Tables dropped in the same plan whose foreign keys
-                // reference this table must go first (RESTRICT semantics).
-                for ((ref_schema_k, ref_name_k), other) in &from.tables {
-                    if ref_schema_k == schema && ref_name_k == name {
-                        continue;
-                    }
-                    let references_this = other.constraints.iter().any(|c| {
-                        matches!(&c.kind, ConstraintKind::ForeignKey { ref_schema, ref_table, .. }
-                            if ref_schema == schema && ref_table == name)
-                    });
-                    let other_dropped = changes.iter().any(|c| {
-                        matches!(c, Change::DropTable { schema: s, name: n }
-                            if s == ref_schema_k && n == ref_name_k)
-                    });
-                    if references_this && other_dropped {
-                        after.push(format!("drop-table:{ref_schema_k}.{ref_name_k}"));
                     }
                 }
                 nodes.push(PlanNode {
@@ -371,21 +380,41 @@ fn plan_impl(
                 materialized,
             } => {
                 let object = qualified(schema, name);
-                nodes.push(node(
-                    rank::DROP_VIEW,
-                    format!("drop-view:{schema}.{name}"),
-                    "drop",
-                    object.clone(),
-                    format!(
-                        "DROP {} {};",
-                        if *materialized {
-                            "MATERIALIZED VIEW"
-                        } else {
-                            "VIEW"
-                        },
-                        object
-                    ),
-                ));
+                // A view that reads this view must be dropped first, even
+                // when it is a plain view reading a materialized view.
+                let mut after = Vec::new();
+                for ((dependent_schema, dependent_name), dependent) in &from.views {
+                    if dependent
+                        .referenced_relations()
+                        .contains(&(schema.clone(), name.clone()))
+                        && changes.iter().any(|c| {
+                            matches!(c, Change::DropView { schema: s, name: n, .. }
+                                if s == dependent_schema && n == dependent_name)
+                        })
+                    {
+                        after.push(format!("drop-view:{dependent_schema}.{dependent_name}"));
+                    }
+                }
+                nodes.push(PlanNode {
+                    rank: rank::DROP_VIEW,
+                    key: format!("drop-view:{schema}.{name}"),
+                    payload: PlanStatement {
+                        sql: format!(
+                            "DROP {} {};",
+                            if *materialized {
+                                "MATERIALIZED VIEW"
+                            } else {
+                                "VIEW"
+                            },
+                            object.clone()
+                        ),
+                        action: "drop",
+                        object,
+                        transactional: true,
+                        hazards: Vec::new(),
+                    },
+                    after,
+                });
             }
             Change::DropTrigger {
                 schema,
@@ -516,6 +545,73 @@ fn plan_impl(
                     render_create_type(pg_type),
                 ));
             }
+            Change::ReplaceEnumInPlace {
+                pg_type,
+                old_name,
+                columns,
+            } => {
+                // PostgreSQL refuses DROP TYPE while a column still uses
+                // it. Rename the old type, create the replacement under the
+                // desired name, rewrite every dependent column through its
+                // text representation, then drop the old type. This is a
+                // destructive rewrite and is flagged by the safety pass.
+                let object = qualified(&pg_type.schema, &pg_type.name);
+                let rename_key = format!("enum-rename-old:{}:{}", pg_type.schema, old_name);
+                nodes.push(node(
+                    rank::DROP_TYPE,
+                    rename_key.clone(),
+                    "alter",
+                    object.clone(),
+                    format!(
+                        "ALTER TYPE {object} RENAME TO {};",
+                        crate::naming::quote_ident(old_name)
+                    ),
+                ));
+                let create_key = format!("create-type:{}:{}", pg_type.schema, pg_type.name);
+                nodes.push(node(
+                    rank::CREATE_TYPE,
+                    create_key.clone(),
+                    "create",
+                    object.clone(),
+                    render_create_type(pg_type),
+                ));
+                // `format_type` omits the ambient `public` schema, so the
+                // canonical model spelling is the unqualified name there.
+                let target_type = if pg_type.schema == crate::model::PUBLIC_SCHEMA {
+                    quote_ident(&pg_type.name)
+                } else {
+                    quote_parts(&format!("{}.{}", pg_type.schema, pg_type.name))
+                };
+                let mut after_drop = vec![rename_key.clone(), create_key];
+                for (position, (table_schema, table, column)) in columns.iter().enumerate() {
+                    let key = format!("enum-rewrite:{table_schema}:{table}:{column}:{position}");
+                    nodes.push(node(
+                        rank::ALTER,
+                        key.clone(),
+                        "alter",
+                        format!("{table}.{column}"),
+                        format!(
+                            "ALTER TABLE {} ALTER COLUMN {} TYPE {target_type} USING {}::text::{target_type};",
+                            qualified(table_schema, table),
+                            crate::naming::quote_ident(column),
+                            crate::naming::quote_ident(column)
+                        ),
+                    ));
+                    after_drop.push(key);
+                }
+                nodes.push(PlanNode {
+                    rank: rank::DROP_TYPE,
+                    key: format!("enum-drop-old:{}:{}", pg_type.schema, old_name),
+                    payload: PlanStatement {
+                        sql: format!("DROP TYPE {};", qualified(&pg_type.schema, old_name)),
+                        action: "drop",
+                        object: qualified(&pg_type.schema, old_name),
+                        transactional: true,
+                        hazards: Vec::new(),
+                    },
+                    after: after_drop,
+                });
+            }
             Change::AlterTable {
                 schema,
                 name,
@@ -590,6 +686,27 @@ fn plan_impl(
                     qualified(&table.schema, &table.name),
                     render_create_table(table),
                 ));
+                // `STORAGE` is an ALTER COLUMN option on every supported
+                // server (13-18); the inline CREATE TABLE form is newer.
+                for column in &table.columns {
+                    if let Some(storage) = &column.storage {
+                        nodes.push(node(
+                            rank::ALTER,
+                            format!(
+                                "create-table-storage:{}:{}:{}",
+                                table.schema, table.name, column.name
+                            ),
+                            "alter",
+                            format!("{}.{}", table.name, column.name),
+                            format!(
+                                "ALTER TABLE {} ALTER COLUMN {} SET STORAGE {};",
+                                qualified(&table.schema, &table.name),
+                                quote_ident(&column.name),
+                                storage.as_sql()
+                            ),
+                        ));
+                    }
+                }
                 // Inline non-FK, valid constraints ship with the table;
                 // FKs are added afterwards so that forward references and
                 // mutual references never fail. `NOT VALID` constraints
@@ -684,6 +801,7 @@ fn plan_impl(
                 name,
                 append,
                 renames,
+                inserts,
             } => {
                 let object = qualified(schema, name);
                 for (position, value) in append.iter().enumerate() {
@@ -696,6 +814,26 @@ fn plan_impl(
                             "ALTER TYPE {object} ADD VALUE {};",
                             crate::sql::expr::render_string_literal(value)
                         ),
+                    ));
+                }
+                for (position, insert) in inserts.iter().enumerate() {
+                    let literal = crate::sql::expr::render_string_literal(&insert.value);
+                    let relative = match (&insert.before, &insert.after) {
+                        (Some(before), _) => format!(
+                            " BEFORE {}",
+                            crate::sql::expr::render_string_literal(before)
+                        ),
+                        (None, Some(after)) => {
+                            format!(" AFTER {}", crate::sql::expr::render_string_literal(after))
+                        }
+                        (None, None) => String::new(),
+                    };
+                    nodes.push(node(
+                        rank::ALTER_TYPE,
+                        format!("enum-insert:{schema}:{name}:{position}"),
+                        "alter",
+                        object.clone(),
+                        format!("ALTER TYPE {object} ADD VALUE {literal}{relative};"),
                     ));
                 }
                 for (from, to) in renames {
@@ -729,16 +867,41 @@ fn plan_impl(
                     qualified(&sequence.schema, &sequence.name),
                     sql,
                 ));
+                // A sequence created in the same plan as its owner table
+                // cannot say OWNED BY in CREATE SEQUENCE: the table does not
+                // exist yet. The default that references the sequence keeps
+                // the CREATE TABLE before this ALTER (PostgreSQL docs,
+                // CREATE SEQUENCE / ALTER SEQUENCE).
+                if *create && let Some(owner) = &sequence.owned_by {
+                    nodes.push(node(
+                        rank::ALTER + 1,
+                        format!("sequence-owner:{}:{}", sequence.schema, sequence.name),
+                        "alter",
+                        qualified(&sequence.schema, &sequence.name),
+                        format!(
+                            "ALTER SEQUENCE {} OWNED BY {}.{};",
+                            qualified(&sequence.schema, &sequence.name),
+                            qualified(&owner.schema, &owner.table),
+                            quote_ident(&owner.column)
+                        ),
+                    ));
+                }
             }
             Change::CreateView { view } => {
                 let object = qualified(&view.schema, &view.name);
                 // A view depends on every table it reads: when those tables
                 // are created in the same plan, the view follows them.
                 let mut after = Vec::new();
-                for (schema, table) in view.referenced_relations() {
-                    let key = format!("create-table:{schema}.{table}");
+                for (schema, relation) in view.referenced_relations() {
+                    let key = format!("create-table:{schema}.{relation}");
                     if nodes.iter().any(|n| n.key == key) {
                         after.push(key);
+                    }
+                    // Views are created in dependency order: a view reading
+                    // another view needs that view to exist first.
+                    let view_key = format!("create-view:{schema}.{relation}");
+                    if nodes.iter().any(|n| n.key == view_key) {
+                        after.push(view_key);
                     }
                 }
                 nodes.push(PlanNode {
@@ -955,6 +1118,27 @@ fn plan_impl(
     })
 }
 
+/// All `DROP VIEW` node keys that must precede a `DROP TABLE` of
+/// `(schema, name)`, regardless of the views' own schemas. PostgreSQL's
+/// `DROP TABLE ... RESTRICT` refuses the drop while any view in any schema
+/// still reads the table.
+fn dropped_view_edges(from: &Catalog, schema: &str, name: &str, changes: &[Change]) -> Vec<String> {
+    from.views
+        .iter()
+        .filter(|(_, view)| {
+            view.referenced_relations()
+                .contains(&(schema.to_owned(), name.to_owned()))
+        })
+        .filter(|((view_schema, view_name), _)| {
+            changes.iter().any(|c| {
+                matches!(c, Change::DropView { schema: s, name: n, .. }
+                    if s == view_schema && n == view_name)
+            })
+        })
+        .map(|((view_schema, view_name), _)| format!("drop-view:{view_schema}.{view_name}"))
+        .collect()
+}
+
 fn node(
     rank: u32,
     key: String,
@@ -1141,15 +1325,30 @@ fn render_alter_statements(
                 ),
             )]
         }
-        AlterChange::AddColumn { column } => vec![(
-            rank::ALTER,
-            format!("add-column:{}", column.name),
-            format!("{table}.{}", column.name),
-            format!(
-                "ALTER TABLE {target} ADD COLUMN {};",
-                render_column_def(column)
-            ),
-        )],
+        AlterChange::AddColumn { column } => {
+            let mut out = vec![(
+                rank::ALTER,
+                format!("add-column:{}", column.name),
+                format!("{table}.{}", column.name),
+                format!(
+                    "ALTER TABLE {target} ADD COLUMN {};",
+                    render_column_def(column)
+                ),
+            )];
+            if let Some(storage) = &column.storage {
+                out.push((
+                    rank::ALTER,
+                    format!("add-column-storage:{}", column.name),
+                    format!("{table}.{}", column.name),
+                    format!(
+                        "ALTER TABLE {target} ALTER COLUMN {} SET STORAGE {};",
+                        quote_ident(&column.name),
+                        storage.as_sql()
+                    ),
+                ));
+            }
+            out
+        }
         AlterChange::AddConstraint { constraint } => {
             let body = render_constraint_body(constraint);
             if matches!(constraint.kind, ConstraintKind::ForeignKey { .. }) {
@@ -1245,16 +1444,16 @@ fn render_create_table(table: &Table) -> String {
 }
 
 /// Renders a column definition: name, type, then the canonical option
-/// order STORAGE → COLLATE → DEFAULT → GENERATED (stored/identity) → NOT NULL.
+/// order COLLATE → DEFAULT → GENERATED (stored/identity) → NOT NULL.
+/// `STORAGE` is deliberately omitted: it is only valid in CREATE TABLE on
+/// newer servers, so the planner emits a portable `ALTER COLUMN ... SET
+/// STORAGE` statement instead.
 fn render_column_def(column: &Column) -> String {
     let mut out = format!(
         "{} {}",
         quote_ident(&column.name),
         render_type(&column.data_type)
     );
-    if let Some(storage) = &column.storage {
-        out.push_str(&format!(" STORAGE {}", storage.as_sql()));
-    }
     if let Some(collation) = &column.collation {
         out.push_str(&format!(" COLLATE {}", render_collation(collation)));
     }
@@ -1654,7 +1853,7 @@ fn render_create_sequence(sequence: &crate::model::Sequence) -> String {
         "CREATE SEQUENCE {}",
         qualified(&sequence.schema, &sequence.name)
     );
-    out.push_str(&render_sequence_options(sequence));
+    out.push_str(&render_sequence_options(sequence, false));
     out.push(';');
     out
 }
@@ -1665,12 +1864,12 @@ fn render_alter_sequence(sequence: &crate::model::Sequence) -> String {
         "ALTER SEQUENCE {}",
         qualified(&sequence.schema, &sequence.name)
     );
-    out.push_str(&render_sequence_options(sequence));
+    out.push_str(&render_sequence_options(sequence, true));
     out.push(';');
     out
 }
 
-fn render_sequence_options(sequence: &crate::model::Sequence) -> String {
+fn render_sequence_options(sequence: &crate::model::Sequence, include_owner: bool) -> String {
     let o = &sequence.options;
     let mut out = format!(
         " AS {} INCREMENT BY {} MINVALUE {} MAXVALUE {} START WITH {} CACHE {} {}",
@@ -1682,13 +1881,15 @@ fn render_sequence_options(sequence: &crate::model::Sequence) -> String {
         o.cache,
         if o.cycle { "CYCLE" } else { "NO CYCLE" }
     );
-    match &sequence.owned_by {
-        Some(owner) => out.push_str(&format!(
-            " OWNED BY {}.{}",
-            qualified(&owner.schema, &owner.table),
-            quote_ident(&owner.column)
-        )),
-        None => out.push_str(" OWNED BY NONE"),
+    if include_owner {
+        match &sequence.owned_by {
+            Some(owner) => out.push_str(&format!(
+                " OWNED BY {}.{}",
+                qualified(&owner.schema, &owner.table),
+                quote_ident(&owner.column)
+            )),
+            None => out.push_str(" OWNED BY NONE"),
+        }
     }
     out
 }
@@ -1790,9 +1991,32 @@ fn render_create_routine(routine: &crate::model::Routine) -> String {
     for (name, value) in &routine.settings {
         out.push_str(&format!(" SET {name} = {value}"));
     }
-    out.push_str(&format!(" AS {}", routine.body));
+    out.push_str(" AS ");
+    out.push_str(&dollar_quote_body(&routine.body));
     out.push(';');
     out
+}
+
+/// Wraps a routine body in dollar quotes, choosing a tag that does not occur
+/// in the body (PostgreSQL, "Dollar-Quoted String Constants": the tag must
+/// not appear in the enclosed text or the literal terminates early). The
+/// corpus of candidate tags is unbounded, so a safe tag always exists.
+fn dollar_quote_body(body: &str) -> String {
+    let delimiter = |tag: Option<usize>| match tag {
+        None => "$$".to_owned(),
+        Some(0) => "$pgdelta$".to_owned(),
+        Some(n) => format!("$pgdelta{n}$"),
+    };
+    let mut tag = None;
+    let mut n = 0usize;
+    loop {
+        let delim = delimiter(tag);
+        if !body.contains(&delim) {
+            return format!("{delim}{body}{delim}");
+        }
+        tag = Some(n);
+        n += 1;
+    }
 }
 
 /// Renders `CREATE TRIGGER`.
@@ -1884,4 +2108,28 @@ fn render_partition_by(partition: &crate::model::Partitioning) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!("PARTITION BY {} ({keys});", partition.strategy.as_sql())
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used)]
+mod tests {
+    use super::*;
+
+    /// PostgreSQL's DROP TABLE RESTRICT considers dependent views in every
+    /// schema, not just the table's own schema (review finding 7).
+    #[test]
+    fn drop_table_waits_for_views_in_every_schema() {
+        let from = crate::source::catalog_from_sql(
+            "CREATE SCHEMA s; CREATE TABLE t (c int); CREATE VIEW s.v AS SELECT c FROM public.t;",
+            "from.sql",
+        )
+        .expect("parsing");
+        let to = crate::source::catalog_from_sql("", "to.sql").expect("parsing");
+        let changes = crate::diff::diff(&from, &to);
+        let edges = dropped_view_edges(&from, "public", "t", &changes);
+        assert!(
+            edges.contains(&"drop-view:s.v".to_owned()),
+            "cross-schema view must be dropped before the table; got {edges:?}"
+        );
+    }
 }

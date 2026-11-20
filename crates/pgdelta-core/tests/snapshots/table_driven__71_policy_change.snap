@@ -13,6 +13,6 @@ BEGIN;
 
 DROP POLICY "owner_read" ON "public"."documents";
 
-CREATE POLICY "owner_read" ON "public"."documents" FOR SELECT USING ("owner" = "session_user"());
+CREATE POLICY "owner_read" ON "public"."documents" FOR SELECT USING ("owner" = SESSION_USER);
 
 COMMIT;

@@ -1,0 +1,23 @@
+---
+source: crates/pgdelta-core/tests/table_driven.rs
+expression: script
+---
+-- pgdelta 0.5.0 migration
+-- from: <83_serial_column/from.sql>
+-- to:   <83_serial_column/to.sql>
+--
+-- The first block runs inside a single transaction.
+-- Any following block must run outside a transaction block.
+
+BEGIN;
+
+CREATE SEQUENCE "public"."t_id_seq" AS integer INCREMENT BY 1 MINVALUE 1 MAXVALUE 2147483647 START WITH 1 CACHE 1 NO CYCLE;
+
+CREATE TABLE "public"."t" (
+    "id" integer DEFAULT "nextval"('t_id_seq') NOT NULL,
+    "note" text
+);
+
+ALTER SEQUENCE "public"."t_id_seq" OWNED BY "public"."t"."id";
+
+COMMIT;

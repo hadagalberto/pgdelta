@@ -551,6 +551,34 @@ pub(crate) fn analyze_plan(plan: &mut Plan, from: &Catalog, to: &Catalog) {
             }
         }
     }
+
+    // Rewriting a column through its text representation to replace an enum
+    // is destructive: values that are not in the new label set are rejected
+    // at apply time. The planner emits the `USING col::text::new` statement;
+    // flag it even though the SQL text alone cannot identify the reason.
+    for change in crate::diff::diff(from, to) {
+        let Change::ReplaceEnumInPlace { columns, .. } = change else {
+            continue;
+        };
+        for (_, table, column) in columns {
+            let object = format!("{table}.{column}");
+            for statement in plan.statements_mut() {
+                if statement.object == object
+                    && normalize(&statement.sql).contains(" using ")
+                    && !statement
+                        .hazards
+                        .iter()
+                        .any(|h| h.code == "enum-value-removal")
+                {
+                    statement.hazards.push(destructive(
+                        "enum-value-removal",
+                        "Removing or reordering enum values rewrites every dependent column via \
+                         its text representation; values no longer in the enum are rejected.",
+                    ));
+                }
+            }
+        }
+    }
 }
 
 /// True when `to` cannot represent every value of `from`. Only the builtin

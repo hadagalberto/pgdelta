@@ -10,12 +10,13 @@
 use crate::error::{Error, Result};
 use crate::model::{
     Catalog, Column, Constraint, ConstraintKind, Extension, Generated, Identity, Index,
-    IndexElemKind, PUBLIC_SCHEMA, Table,
+    IndexElemKind, PUBLIC_SCHEMA, Sequence, SequenceOwner, Table,
 };
 use crate::naming;
 use crate::sql::{
-    ParsedStatement, RawColumn, RawConstraint, RawConstraintKind, RawForeignKey, RawIndex,
-    RawTable, alter_table::AlterAction, alter_table::SeqOption, normalize_sequence_options,
+    ParsedSequenceOptions, ParsedStatement, RawColumn, RawConstraint, RawConstraintKind,
+    RawForeignKey, RawIndex, RawTable, alter_table::AlterAction, alter_table::SeqOption,
+    normalize_sequence_options,
 };
 
 /// Applies a slice of parsed statements (with 1-based statement indices
@@ -944,14 +945,39 @@ fn apply_create_table(
     )?;
     validate_constraint_columns(source, index, &constraints, &columns, "CREATE TABLE")?;
     validate_single_primary_key(source, index, &constraints, "CREATE TABLE")?;
+    // `serial` is shorthand for an integer column plus a sequence, a
+    // `nextval(...)` default and `OWNED BY` the column (PostgreSQL,
+    // "Serial Types"). The sequence name follows PostgreSQL's
+    // `<table>_<column>_seq` convention and is truncated to NAMEDATALEN-1.
+    let mut serials: Vec<(String, String, String)> = Vec::new();
+    for (raw_col, column) in raw.columns.iter().zip(columns.iter_mut()) {
+        if raw_col.serial {
+            let sequence_name = trunc(&format!("{}_{}_seq", name, raw_col.name));
+            if column.default.is_none() {
+                // Canonical form produced by `pg_get_expr` + pgdelta's
+                // expression normaliser for a serial default (`introspect`):
+                // a bare quoted function name and the regclass literal.
+                let sequence_ref = if schema == PUBLIC_SCHEMA {
+                    sequence_name.clone()
+                } else {
+                    format!("{schema}.{sequence_name}")
+                };
+                column.default = Some(format!("\"nextval\"('{sequence_ref}')"));
+            }
+            // `serial` implies NOT NULL (PostgreSQL, "Serial Types").
+            column.not_null = true;
+            serials.push((sequence_name, column.data_type.clone(), column.name.clone()));
+        }
+    }
+
     validate_table_expressions(source, index, &columns, &constraints, "CREATE TABLE")?;
     imply_not_null(&mut columns, &constraints);
 
     catalog.tables.insert(
         (schema.clone(), name.clone()),
         Table {
-            schema,
-            name,
+            schema: schema.clone(),
+            name: name.clone(),
             columns,
             constraints,
             partition: raw.partition.clone(),
@@ -960,6 +986,35 @@ fn apply_create_table(
             rls_forced: false,
         },
     );
+    for (sequence_name, data_type, column_name) in serials {
+        if catalog
+            .sequences
+            .contains_key(&(schema.clone(), sequence_name.clone()))
+        {
+            continue;
+        }
+        let options = normalize_sequence_options(
+            source,
+            index,
+            &data_type,
+            &ParsedSequenceOptions::default(),
+            "CREATE TABLE",
+        )?;
+        catalog.sequences.insert(
+            (schema.clone(), sequence_name.clone()),
+            Sequence {
+                schema: schema.clone(),
+                name: sequence_name,
+                data_type,
+                options,
+                owned_by: Some(SequenceOwner {
+                    schema: schema.clone(),
+                    table: name.clone(),
+                    column: column_name,
+                }),
+            },
+        );
+    }
     Ok(())
 }
 
@@ -1382,6 +1437,20 @@ fn apply_add_column(
     }
 
     let mut column = build_column(source, index, raw, "ALTER TABLE")?;
+    let mut sequence = None;
+    if raw.serial {
+        let sequence_name = trunc(&format!("{}_{}_seq", table_name, raw.name));
+        if column.default.is_none() {
+            let sequence_ref = if schema == PUBLIC_SCHEMA {
+                sequence_name.clone()
+            } else {
+                format!("{schema}.{sequence_name}")
+            };
+            column.default = Some(format!("\"nextval\"('{sequence_ref}')"));
+        }
+        column.not_null = true;
+        sequence = Some((sequence_name, column.data_type.clone(), column.name.clone()));
+    }
     let raw_body = RawTable {
         columns: vec![raw.clone()],
         constraints: Vec::new(),
@@ -1425,6 +1494,33 @@ fn apply_add_column(
     let table = table_mut(catalog, schema, table_name, source, index)?;
     table.columns.push(column);
     table.constraints.extend(constraints);
+    if let Some((sequence_name, data_type, column_name)) = sequence
+        && !catalog
+            .sequences
+            .contains_key(&(schema.to_owned(), sequence_name.clone()))
+    {
+        let options = normalize_sequence_options(
+            source,
+            index,
+            &data_type,
+            &ParsedSequenceOptions::default(),
+            "ALTER TABLE",
+        )?;
+        catalog.sequences.insert(
+            (schema.to_owned(), sequence_name.clone()),
+            Sequence {
+                schema: schema.to_owned(),
+                name: sequence_name,
+                data_type,
+                options,
+                owned_by: Some(SequenceOwner {
+                    schema: schema.to_owned(),
+                    table: table_name.to_owned(),
+                    column: column_name,
+                }),
+            },
+        );
+    }
     Ok(())
 }
 
