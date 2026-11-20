@@ -171,12 +171,19 @@ fn run_suffix(tag: &str) -> String {
     format!("{tag}_{}_{nanos}", std::process::id())
 }
 
-/// True when running in CI. A missing database URL there means the live
-/// suite silently did nothing, which must fail the build (review finding 8).
-fn in_ci() -> bool {
-    std::env::var("CI").is_ok_and(|value| {
+fn env_flag(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|value| {
         !value.is_empty() && !matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "no")
     })
+}
+
+/// True when running in CI without an explicit opt-out. A missing database
+/// URL there means the live suite silently did nothing, which must fail the
+/// build (review finding 8). CI jobs that deliberately run without a
+/// database (the fmt/clippy/unit matrix) set `PGDELTA_SKIP_LIVE_TESTS=1`;
+/// the `integration-postgres` jobs set the URL and never skip.
+fn in_ci() -> bool {
+    env_flag("CI") && !env_flag("PGDELTA_SKIP_LIVE_TESTS")
 }
 
 fn test_url() -> Option<String> {

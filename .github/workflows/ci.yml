@@ -32,6 +32,10 @@ jobs:
       - name: build
         run: cargo build --workspace
       - name: tests
+        # No database on this matrix: live tests are covered by the
+        # integration-postgres jobs, so the CI-unset guard is opted out here.
+        env:
+          PGDELTA_SKIP_LIVE_TESTS: '1'
         run: cargo test --workspace
 
   integration-postgres:
