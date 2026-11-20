@@ -1,0 +1,20 @@
+[package]
+name = "pgdelta"
+description = "Diff two PostgreSQL schemas and generate a safe, ordered migration script"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+pgdelta-core = { path = "../pgdelta-core", version = "0.1.0" }
+serde_json = "1"
+
+[[bin]]
+name = "pgdelta"
+
+[lints]
+workspace = true

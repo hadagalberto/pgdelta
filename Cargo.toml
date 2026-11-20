@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = ["crates/pgdelta-core", "crates/pgdelta"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Hadagalberto Junior"]
+license = "MIT"
+repository = "https://github.com/hadagalberto/pgdelta"
+
+[workspace.lints.rust]
+missing_docs = "warn"
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+dbg_macro = "warn"
+todo = "deny"
+unimplemented = "deny"
+# The library must never panic on user input; tests may (panicking is the
+# test-failure mechanism there and is allowed at their crate roots).
+unwrap_used = "warn"
+expect_used = "warn"
+# The SQL grammars are statement-per-arm by design: each arm mirrors a
+# production of the PostgreSQL synopsis, and merging "identical" arms or
+# splitting large functions would obscure the mapping to the docs.
+match_same_arms = "allow"
+too_many_lines = "allow"
+# Statement parsers thread a (source, index, cursor, text) context by
+# nature; grouping them into a struct would obscure the grammar.
+too_many_arguments = "allow"
+# Getters and pure helpers on the model: the results are consumed
+# immediately at every call site; must_use here is ceremony, not safety.
+must_use_candidate = "allow"
+# Sequence arithmetic uses PostgreSQL's fixed i64 catalog ranges
+# (smallint/integer/bigint limits); the flagged casts are within those
+# ranges by construction.
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_lossless = "allow"
+
+[profile.release]
+lto = true

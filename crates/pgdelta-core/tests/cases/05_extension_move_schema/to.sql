@@ -1,0 +1,2 @@
+CREATE SCHEMA search;
+CREATE EXTENSION pg_trgm WITH SCHEMA search;

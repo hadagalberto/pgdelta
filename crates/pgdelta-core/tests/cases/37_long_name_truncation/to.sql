@@ -1,0 +1,1 @@
+CREATE TABLE this_is_a_very_long_table_name_used_to_exercise_identifier_truncation_rules (a int PRIMARY KEY, another_extremely_long_column_name_here text UNIQUE);

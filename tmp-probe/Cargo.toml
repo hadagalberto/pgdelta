@@ -1,0 +1,8 @@
+﻿[package]
+name = "probe"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+pg_query = "6.1.0"
+

@@ -1,0 +1,26 @@
+[package]
+name = "pgdelta-core"
+description = "Core library for pgdelta: PostgreSQL schema model, SQL sources, diff and migration planning"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlparser = "0.59"
+thiserror = "2"
+
+[dev-dependencies]
+insta = { version = "1", features = ["glob"] }
+proptest = "1"
+tokio = { version = "1", features = ["rt", "macros", "time"] }
+tokio-postgres = "0.7"
+
+[lib]
+name = "pgdelta_core"
+
+[lints]
+workspace = true

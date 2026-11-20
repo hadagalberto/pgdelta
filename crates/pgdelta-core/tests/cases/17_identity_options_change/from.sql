@@ -1,0 +1,1 @@
+CREATE TABLE counters (id integer GENERATED ALWAYS AS IDENTITY);
